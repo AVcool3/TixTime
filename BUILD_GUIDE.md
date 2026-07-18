@@ -1,384 +1,356 @@
 # TixTime Build Guide
 
-A step-by-step guide to building TixTime: a web app where users pick concert
-venues across the country in a React UI, and the system tells them the best
-time to buy tickets for events at those venues.
+Building TixTime: a React app where users pick concert venues across the
+country and get the **best time to buy tickets**, powered by:
+
+- **Data**: [rebrowser/seatgeek-dataset](https://github.com/rebrowser/seatgeek-dataset)
+  — bulk SeatGeek marketplace data (events, listings, performers, venues) as
+  Parquet, updated daily.
+- **Logic flow**: modeled on
+  [ubparmar/Airline_Fare_Prediction](https://github.com/ubparmar/Airline_Fare_Prediction)
+  — historical data → preprocessing → feature engineering → regression model
+  trained in notebooks → serialized model → web app serves predictions.
+
+The one twist vs. the airline project: it predicts *a fare given inputs*;
+we need *the best day to buy*. Solution: train the same style of regressor
+with **days-until-event as a feature**, then sweep that feature over every
+remaining purchase date and take the minimum. The argmin **is** the
+recommendation.
 
 ---
 
-## 0. What you are actually building (and what you are not)
+## 0. Ground rules (read first)
 
-You are building a **price-timing recommendation system**, made of four parts:
-
-1. **A React frontend** — users search/select venues, browse upcoming events,
-   and see a "buy now / wait" recommendation with a price-history chart.
-2. **A backend API** — serves venues, events, price history, and predictions.
-3. **A price-polling worker** — a scheduled job that snapshots ticket prices
-   for tracked events every few hours. This is the heart of the system:
-   **no public API gives you historical ticket prices, so you must build your
-   own price time-series by polling.**
-4. **A prediction engine** — starts as a simple heuristic, graduates to a
-   trained model once you've collected weeks of your own price data.
-
-**What you must NOT build:** anything that automates the purchase itself,
-bypasses queues/captchas, or scrapes sites that prohibit it. The U.S. BOTS Act
-(2016) makes circumventing ticket-purchase controls illegal, and
-Ticketmaster/StubHub ToS prohibit automated checkout. A tool that *informs* a
-human when to buy is fine; a tool that *buys* is not. TixTime informs.
+- **This is a recommendation tool, not a purchasing bot.** Automating ticket
+  checkout violates the U.S. BOTS Act and platform ToS. TixTime tells a
+  human when to buy and links out; it never buys.
+- **Dataset licensing**: the rebrowser dataset is free for **research and
+  non-commercial use with attribution**; commercial use is paid (~$2/1,000
+  rows). Comply with their terms and SeatGeek's ToS.
+- **The GitHub repo is a preview.** Critically, the preview **redacts price,
+  fees, and deal-score fields** — the exact columns this project needs — and
+  its events skew sports (MLB/NBA/NFL). Before building anything, get access
+  to the full dataset via Rebrowser and confirm (a) price fields are
+  populated and (b) concert/music events are covered. Everything below
+  assumes you have listings **with prices**. If that falls through, the
+  fallback is polling SeatGeek's free API yourself (see §7).
 
 ---
 
 ## 1. Architecture
 
+Mirrors Airline_Fare_Prediction's shape (data → notebooks → trained model →
+web app), with the Django monolith split into a React frontend + Python API
+so the UI matches the original TixTime plan:
+
 ```
-┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
-│  React SPA  │────▶│  API (Node or    │────▶│  PostgreSQL   │
-│  (Vite)     │     │  FastAPI)        │     │               │
-└─────────────┘     └──────────────────┘     └──────▲───────┘
-                                                    │
-                    ┌──────────────────┐            │
-                    │  Polling worker  │────────────┘
-                    │  (cron, every    │
-                    │  4–6 hours)      │──▶ Ticketmaster / SeatGeek APIs
-                    └──────────────────┘
+ rebrowser Parquet drops (daily)
+        │
+        ▼
+┌───────────────────┐      ┌──────────────────────┐
+│  Ingestion job    │─────▶│  PostgreSQL           │
+│  (Python, cron)   │      │  venues/events/       │
+└───────────────────┘      │  listings/daily_prices│
+                           └─────────▲────────────┘
+┌───────────────────┐               │
+│  Notebooks/        │  train ──────┤
+│  train.py          │  read        │
+│  → model.joblib    │              │
+└─────────┬─────────┘               │
+          ▼                         │
+┌───────────────────┐               │
+│  FastAPI service   │◀─────────────┘
+│  loads model.joblib│
+└─────────▲─────────┘
+          │ JSON
+┌─────────┴─────────┐
+│  React SPA (Vite)  │  venue picker → event page → buy-timing curve
+└───────────────────┘
 ```
 
-Recommended stack (all free tiers to start):
+| Layer          | Choice                          | Airline-repo analog |
+|----------------|--------------------------------|---------------------|
+| Data           | rebrowser Parquet → Postgres    | `Data/` CSVs |
+| EDA + training | Jupyter notebooks + `train.py`  | `Notebooks/` |
+| Model          | sklearn regressor → `joblib`    | Decision Tree Regressor |
+| Serving        | FastAPI (Python)                | Django views |
+| Frontend       | React + Vite + TS + Recharts    | Django templates/HTML |
+| Scheduler      | cron (ingest daily, retrain weekly) | manual retraining |
 
-| Layer      | Choice                              | Why |
-|------------|-------------------------------------|-----|
-| Frontend   | React + Vite + TypeScript           | Fast dev, typed API contracts |
-| Charts     | Recharts                            | Simple time-series charts |
-| Backend    | Node.js + Express + TypeScript      | One language across the stack |
-| Database   | PostgreSQL (Supabase/Neon free tier)| Time-series-friendly, free hosting |
-| Scheduler  | node-cron in the worker process, or GitHub Actions cron | Zero-infra polling |
-| Hosting    | Frontend: Vercel/Netlify. API+worker: Railway/Render/Fly.io | Free tiers |
+Repo layout:
+
+```
+tixtime/
+  ingestion/     load_parquet.py, build_daily_prices.py
+  notebooks/     01_eda.ipynb, 02_features.ipynb, 03_model.ipynb
+  ml/            features.py, train.py, model.joblib
+  api/           main.py (FastAPI), predict.py
+  web/           React app (Vite)
+```
 
 ---
 
-## 2. Data sources — where venues, events, and prices come from
+## 2. Ingesting the dataset
 
-### 2.1 Ticketmaster Discovery API (venues + events, free)
+The dataset has four entities; map them straight into Postgres:
 
-Register at https://developer.ticketmaster.com — free key, 5,000 calls/day,
-rate limit 5 req/sec. This is your source for **every major venue and concert
-in the country**.
+| Parquet entity   | Table      | Keep |
+|------------------|-----------|------|
+| `venues`         | `venues`   | id, name, city, state, lat/lng, capacity, popularity score |
+| `performers`     | `performers` | id, name, type, popularity score |
+| `events`         | `events`   | id, title, datetime, status, venue_id, performer_id, taxonomy (filter to music/concert), cross-platform IDs |
+| `event_listings` | `listings` | event_id, captured/observed date, section, row, quantity, marketplace, **price, fees, deal bucket** |
 
-- Venue search: `GET /discovery/v2/venues?keyword=red+rocks&apikey=KEY`
-- Events at a venue:
-  `GET /discovery/v2/events?venueId={id}&classificationName=music&apikey=KEY`
-- Events include `priceRanges` (min/max face value) — useful, but primary
-  prices are mostly static. The interesting price movement is on resale.
+Loader — DuckDB reads Parquet natively and writes to Postgres in a few lines:
 
-### 2.2 SeatGeek API (resale price stats — your main price signal)
+```python
+# ingestion/load_parquet.py
+import duckdb
 
-Register at https://seatgeek.com/account/develop — free client ID. Every
-event response includes a `stats` object:
+con = duckdb.connect()
+con.execute("INSTALL postgres; LOAD postgres;")
+con.execute("ATTACH 'dbname=tixtime user=tixtime host=localhost' AS pg (TYPE postgres);")
 
-```json
-"stats": {
-  "listing_count": 428,
-  "lowest_price": 89,
-  "average_price": 173,
-  "median_price": 141,
-  "highest_price": 950
-}
+for entity in ["venues", "performers", "events", "event_listings"]:
+    con.execute(f"""
+        INSERT INTO pg.{entity}
+        SELECT * FROM read_parquet('data/drops/{entity}/*.parquet')
+        ON CONFLICT DO NOTHING
+    """)
 ```
 
-This is exactly what you need to snapshot over time. Endpoints:
-
-- Venues: `GET https://api.seatgeek.com/2/venues?q=red+rocks&client_id=ID`
-- Events: `GET https://api.seatgeek.com/2/events?venue.id={id}&type=concert&client_id=ID`
-
-### 2.3 Matching the two sources
-
-Match Ticketmaster and SeatGeek venues on `(normalized name, city, state)`,
-falling back to lat/long proximity (< 500 m). Store both external IDs on your
-venue row. You can also run on SeatGeek alone to start — it has venues,
-events, AND price stats, so **v1 can be SeatGeek-only**. Add Ticketmaster
-later for better event coverage and face-value ranges.
-
-> **Do not scrape** Ticketmaster or StubHub HTML. Both prohibit it, both
-> aggressively bot-detect, and the official APIs give you what you need.
-
----
-
-## 3. Database schema
+Run daily via cron when new drops land. Then collapse raw listings into the
+training-friendly table — one row per event per observation day:
 
 ```sql
-CREATE TABLE venues (
-  id            SERIAL PRIMARY KEY,
-  name          TEXT NOT NULL,
-  city          TEXT NOT NULL,
-  state         TEXT NOT NULL,        -- 2-letter code
-  lat           DOUBLE PRECISION,
-  lng           DOUBLE PRECISION,
-  seatgeek_id   INTEGER UNIQUE,
-  ticketmaster_id TEXT UNIQUE,
-  capacity      INTEGER
-);
-
-CREATE TABLE events (
-  id            SERIAL PRIMARY KEY,
-  venue_id      INTEGER NOT NULL REFERENCES venues(id),
-  title         TEXT NOT NULL,
-  performer     TEXT,
-  event_date    TIMESTAMPTZ NOT NULL,
-  on_sale_date  TIMESTAMPTZ,
-  seatgeek_id   INTEGER UNIQUE,
-  ticketmaster_id TEXT UNIQUE,
-  face_min      NUMERIC,
-  face_max      NUMERIC,
-  is_tracked    BOOLEAN DEFAULT TRUE  -- stop polling past events
-);
-
--- The core table: one row per event per poll. This is your gold.
-CREATE TABLE price_snapshots (
-  id            BIGSERIAL PRIMARY KEY,
-  event_id      INTEGER NOT NULL REFERENCES events(id),
-  captured_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  lowest_price  NUMERIC,
-  median_price  NUMERIC,
-  average_price NUMERIC,
-  highest_price NUMERIC,
-  listing_count INTEGER,
-  source        TEXT NOT NULL DEFAULT 'seatgeek'
-);
-CREATE INDEX idx_snapshots_event_time ON price_snapshots(event_id, captured_at);
-
-CREATE TABLE predictions (
-  id            SERIAL PRIMARY KEY,
-  event_id      INTEGER NOT NULL REFERENCES events(id) UNIQUE,
-  recommendation TEXT NOT NULL,       -- 'buy_now' | 'wait' | 'monitor'
-  best_window_start DATE,
-  best_window_end   DATE,
-  confidence    NUMERIC,              -- 0..1
-  reasoning     TEXT,                 -- human-readable explanation
-  computed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- ingestion/build_daily_prices.sql
+INSERT INTO daily_prices (event_id, observed_date, days_until_event,
+                          min_price, median_price, listing_count)
+SELECT
+  l.event_id,
+  l.observed_date,
+  (e.event_date::date - l.observed_date) AS days_until_event,
+  MIN(l.price + COALESCE(l.fees, 0)),
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY l.price + COALESCE(l.fees, 0)),
+  COUNT(*)
+FROM listings l
+JOIN events e ON e.id = l.event_id
+WHERE e.taxonomy_root = 'concert'      -- adjust to actual taxonomy values
+GROUP BY 1, 2, 3
+ON CONFLICT (event_id, observed_date) DO UPDATE
+  SET min_price = EXCLUDED.min_price,
+      median_price = EXCLUDED.median_price,
+      listing_count = EXCLUDED.listing_count;
 ```
+
+`daily_prices` is your equivalent of the airline repo's cleaned training CSV.
+Always model **all-in price (price + fees)** — that's what buyers actually pay.
 
 ---
 
-## 4. The polling worker (build this FIRST)
+## 3. Feature engineering — the airline features, translated
 
-Start collecting data on day one — every day you wait is a day of training
-data lost. Poll every 4–6 hours; that's plenty of resolution for multi-week
-price curves and stays far under rate limits.
+This is the "logic flows with" part. Every feature in
+Airline_Fare_Prediction has a direct ticket-world analog:
 
-```ts
-// worker/poll.ts
-import cron from "node-cron";
-import { db } from "./db";
+| Airline feature            | TixTime feature                            |
+|----------------------------|--------------------------------------------|
+| Journey date → month/day   | Event date → month, day-of-week (Fri/Sat premium) |
+| Days until departure       | **`days_until_event`** (the sweep variable) |
+| Source / destination city  | Venue: city/state, capacity, popularity score |
+| Airline carrier            | Performer: popularity score, type          |
+| Total stops                | Listing supply: `listing_count` that day   |
+| Flight duration            | (no analog — drop)                         |
+| —                          | Price momentum: 7-day slope of median price |
+| —                          | `price_ratio` = current median / event's first observed median |
 
-const SG = "https://api.seatgeek.com/2";
-const CLIENT_ID = process.env.SEATGEEK_CLIENT_ID!;
+```python
+# ml/features.py
+import pandas as pd
 
-async function pollTrackedEvents() {
-  const events = await db.query(
-    `SELECT id, seatgeek_id FROM events
-     WHERE is_tracked AND event_date > now() AND seatgeek_id IS NOT NULL`
-  );
+CATEGORICAL = ["venue_state", "event_dow", "performer_type"]
+NUMERIC = ["days_until_event", "event_month", "venue_capacity",
+           "venue_popularity", "performer_popularity",
+           "listing_count", "price_slope_7d", "price_ratio"]
+TARGET = "median_price"
 
-  for (const ev of events.rows) {
-    const res = await fetch(`${SG}/events/${ev.seatgeek_id}?client_id=${CLIENT_ID}`);
-    if (!res.ok) continue;
-    const { stats } = await res.json();
-    await db.query(
-      `INSERT INTO price_snapshots
-         (event_id, lowest_price, median_price, average_price, highest_price, listing_count)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [ev.id, stats.lowest_price, stats.median_price,
-       stats.average_price, stats.highest_price, stats.listing_count]
-    );
-    await new Promise(r => setTimeout(r, 300)); // stay polite on rate limits
-  }
-}
+def build_features(daily: pd.DataFrame) -> pd.DataFrame:
+    df = daily.sort_values(["event_id", "observed_date"]).copy()
+    df["event_dow"] = df["event_date"].dt.dayofweek
+    df["event_month"] = df["event_date"].dt.month
+    first = df.groupby("event_id")["median_price"].transform("first")
+    df["price_ratio"] = df["median_price"] / first
+    df["price_slope_7d"] = (
+        df.groupby("event_id")["median_price"]
+          .transform(lambda s: s.diff(6) / 6)   # ≈ $/day over last 7 obs
+          .fillna(0)
+    )
+    return df
 
-async function refreshEventsForTrackedVenues() {
-  // For each venue any user has selected, upsert upcoming concerts
-  const venues = await db.query(`SELECT id, seatgeek_id FROM venues WHERE seatgeek_id IS NOT NULL`);
-  for (const v of venues.rows) {
-    const res = await fetch(
-      `${SG}/events?venue.id=${v.seatgeek_id}&type=concert&per_page=50&client_id=${CLIENT_ID}`
-    );
-    const { events } = await res.json();
-    for (const e of events) {
-      await db.query(
-        `INSERT INTO events (venue_id, title, performer, event_date, seatgeek_id)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (seatgeek_id) DO UPDATE SET event_date = EXCLUDED.event_date`,
-        [v.id, e.title, e.performers?.[0]?.name ?? null, e.datetime_utc, e.id]
-      );
+def encode(df: pd.DataFrame) -> pd.DataFrame:
+    return pd.get_dummies(df[CATEGORICAL + NUMERIC + [TARGET]],
+                          columns=CATEGORICAL)   # same one-hot approach as the airline repo
+```
+
+Preprocessing, mirroring the airline notebooks: drop rows with null prices,
+clip listing prices at the 1st/99th percentile per event (speculative $9,999
+listings would poison the target), and require ≥5 observation days per event.
+
+---
+
+## 4. Model training
+
+Same starting model as the airline repo (Decision Tree Regressor), same
+notebook-driven workflow — but hold out **entire events**, not random rows.
+Random splits leak: rows from the same event on adjacent days are nearly
+identical, which inflates test scores and is the airline-repo mistake worth
+fixing rather than copying.
+
+```python
+# ml/train.py
+import joblib
+import pandas as pd
+from sklearn.model_selection import GroupShuffleSplit
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+from features import build_features, encode, TARGET
+
+daily = pd.read_sql("SELECT * FROM daily_prices_joined", DB_URL)  # view joining venue/performer attrs
+df = build_features(daily)
+X = encode(df).drop(columns=[TARGET])
+y = df[TARGET]
+
+# split by event_id so the test set is genuinely unseen events
+gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(gss.split(X, y, groups=df["event_id"]))
+
+model = DecisionTreeRegressor(max_depth=12, min_samples_leaf=20)  # v1, per airline repo
+# model = RandomForestRegressor(n_estimators=300, min_samples_leaf=10)  # v2: strictly better here
+model.fit(X.iloc[train_idx], y.iloc[train_idx])
+
+mae = mean_absolute_error(y.iloc[test_idx], model.predict(X.iloc[test_idx]))
+print(f"MAE on unseen events: ${mae:.2f}")
+
+joblib.dump({"model": model, "columns": list(X.columns)}, "ml/model.joblib")
+```
+
+Also **backtest the actual product claim**: for each held-out completed
+event, compute the day your sweep (§5) would have said "buy" and compare
+that day's real price to the event's true minimum. Report the average $ left
+on the table — that number, not MAE, is whether TixTime works. Retrain
+weekly via cron as new daily drops extend the dataset.
+
+---
+
+## 5. Serving: the days-until-event sweep
+
+The airline app answers one (inputs → fare) query. TixTime asks the model
+the same question once per remaining purchase date and returns the curve +
+its minimum:
+
+```python
+# api/predict.py
+import joblib, pandas as pd
+from datetime import date, timedelta
+
+bundle = joblib.load("ml/model.joblib")
+MODEL, COLUMNS = bundle["model"], bundle["columns"]
+
+def best_time_to_buy(event_row: dict) -> dict:
+    days_out_today = (event_row["event_date"] - date.today()).days
+    rows = []
+    for d in range(days_out_today, 0, -1):          # every remaining purchase day
+        f = dict(event_row["features"])              # venue/performer/current-market features
+        f["days_until_event"] = d
+        rows.append(f)
+
+    X = pd.get_dummies(pd.DataFrame(rows)).reindex(columns=COLUMNS, fill_value=0)
+    preds = MODEL.predict(X)
+
+    curve = [
+        {"buy_date": str(date.today() + timedelta(days=days_out_today - d)),
+         "days_until_event": d,
+         "predicted_price": round(float(p), 2)}
+        for d, p in zip(range(days_out_today, 0, -1), preds)
+    ]
+    best = min(curve, key=lambda c: c["predicted_price"])
+    today_price = curve[0]["predicted_price"]
+    savings = today_price - best["predicted_price"]
+
+    return {
+        "curve": curve,
+        "best_buy_date": best["buy_date"],
+        "recommendation": "wait" if savings > max(5, 0.05 * today_price) else "buy_now",
+        "expected_savings": round(savings, 2),
+        "reasoning": (
+            f"Model expects the low (${best['predicted_price']}) around "
+            f"{best['buy_date']} ({best['days_until_event']} days out); "
+            f"buying today costs about ${today_price}."
+        ),
     }
-  }
-}
-
-cron.schedule("0 */4 * * *", async () => {   // every 4 hours
-  await refreshEventsForTrackedVenues();
-  await pollTrackedEvents();
-});
 ```
 
-**Which events to track:** every upcoming concert at every venue any user has
-selected. That keeps the poll set demand-driven and small. If you want a
-nationwide dataset for model training, additionally track the top ~200
-venues by capacity.
+FastAPI surface:
+
+```
+GET /api/venues?q=&state=        search venues (from the ingested venues table)
+GET /api/venues/{id}/events      upcoming concerts at a venue
+GET /api/events/{id}             event detail + latest observed prices
+GET /api/events/{id}/history     daily_prices series (the observed past)
+GET /api/events/{id}/forecast    best_time_to_buy() output (the predicted future)
+```
+
+Caveat to encode in the response: features like `listing_count` and
+`price_slope_7d` are only known for *today* — for future purchase dates the
+sweep holds them at current values. That's standard for this style of model
+but means confidence decays with horizon; say so in the UI for far-out dates.
 
 ---
 
-## 5. Prediction engine — "best time to buy"
+## 6. React frontend
 
-### Phase 1: Heuristic (ship this in week 1)
-
-Resale concert prices follow a well-documented pattern:
-
-- Prices **spike at on-sale** (hype), then **drift down** as more listings appear.
-- They typically **bottom out 3–14 days before the event** for
-  average-demand shows, as resellers get nervous.
-- **High-demand shows are the exception**: prices only climb. Signal: rising
-  median with *falling* listing count.
-- The **final 24–72 hours** can dip further (fire-sale) but is risky —
-  inventory can also vanish.
-
-Encode that directly:
-
-```ts
-// server/predict.ts
-type Snapshot = { captured_at: Date; median_price: number; listing_count: number };
-
-export function predict(snapshots: Snapshot[], eventDate: Date) {
-  const daysOut = (eventDate.getTime() - Date.now()) / 86_400_000;
-  const recent = snapshots.slice(-6);                    // last ~24h of polls
-  const week = snapshots.filter(s => s.captured_at > new Date(Date.now() - 7 * 86_400_000));
-
-  const trend = linearSlope(week.map(s => s.median_price));        // $/day
-  const supplyTrend = linearSlope(week.map(s => s.listing_count)); // listings/day
-  const current = recent.at(-1)?.median_price;
-  const historicalMin = Math.min(...snapshots.map(s => s.median_price));
-
-  // High-demand: price rising AND supply shrinking -> it only gets worse
-  if (trend > 0 && supplyTrend < 0) {
-    return rec("buy_now", 0.8,
-      "Prices are rising while listings disappear — this show is selling out. Waiting will cost you.");
-  }
-  // Near the historical low with a falling trend and time left -> wait a bit
-  if (trend < 0 && daysOut > 14) {
-    return rec("wait", 0.7,
-      `Prices are falling (~$${Math.abs(trend).toFixed(0)}/day). Typical bottom is 3–14 days out.`);
-  }
-  // In the sweet spot and at/near the observed low -> buy
-  if (daysOut <= 14 && daysOut > 2 && current !== undefined && current <= historicalMin * 1.05) {
-    return rec("buy_now", 0.75,
-      "You're in the 3–14 day window and at the lowest price we've seen for this event.");
-  }
-  if (daysOut <= 2) {
-    return rec("buy_now", 0.6,
-      "Event is imminent. Prices may dip further, but inventory can vanish — buy if you're committed.");
-  }
-  return rec("monitor", 0.5, "No strong signal yet — we'll keep watching.");
-}
+```
+web/src/
+  pages/VenueSearch.tsx      debounced search + state filter (nationwide browsing)
+  pages/VenueDetail.tsx      upcoming concerts, current low price, rec badge
+  pages/EventDetail.tsx      the money page
+  components/PriceChart.tsx  Recharts: solid line = observed history,
+                             dashed line = forecast curve, dot on best_buy_date
+  components/RecommendationCard.tsx  BUY NOW / WAIT + expected savings + reasoning
 ```
 
-Run this nightly for every tracked event and upsert into `predictions`.
-Always store the `reasoning` string — users trust a recommendation they can
-read the *why* for, and it makes debugging the model trivial.
-
-### Phase 2: Learned model (after 4–8 weeks of snapshots)
-
-Once you have completed events (you know each one's actual price minimum and
-when it occurred), you have labeled training data. Frame it as:
-
-> Given (days_until_event, current_median / historical_median, 7-day price
-> slope, 7-day supply slope, venue capacity, day-of-week of event, performer
-> popularity), predict **P(price will drop ≥5% before the event)**.
-
-Train gradient-boosted trees (XGBoost/LightGBM) in a small Python service or
-offline notebook; export predictions back into the `predictions` table. If
-P(drop) > 0.6 → "wait", < 0.4 → "buy now", else "monitor". Keep the
-heuristic as fallback for events with sparse data.
+EventDetail renders one chart from two endpoints: `/history` (solid,
+observed) flowing into `/forecast` (dashed, predicted), with the recommended
+buy date marked and a shaded ±few-days window around it. The
+RecommendationCard shows the verdict, expected savings, and the `reasoning`
+string verbatim — users trust a recommendation they can read the why for.
+Use TanStack Query for data fetching. When an event has fewer than ~5
+observation days, show "still collecting data" instead of a confident
+forecast.
 
 ---
 
-## 6. Backend API
+## 7. Fallback / supplement: live polling
 
-Small surface, four resources:
-
-```
-GET  /api/venues?q=&state=          venue search (proxy SeatGeek + cache in DB)
-GET  /api/venues/:id/events         upcoming concerts at a venue
-GET  /api/events/:id                event detail + latest prediction
-GET  /api/events/:id/prices         price_snapshots time series for the chart
-POST /api/track                     { venueId } — user selects a venue; worker
-                                    begins polling its events
-```
-
-Notes:
-- Venue search should hit your DB first and fall through to SeatGeek's
-  `/venues?q=` on miss, upserting results — the catalog builds itself.
-- Cache API responses (60s is fine). Never call SeatGeek/Ticketmaster
-  directly from the browser: you'd leak your keys. All third-party calls go
-  through your backend.
-- Auth is optional for v1; add it when you add per-user watchlists/alerts.
+The dataset gives deep history (great for training) but you're dependent on
+daily drops for freshness, and the preview's price redaction means access
+could be a blocker. Keep the original plan's poller as a complement: SeatGeek's
+free API (`/events/{id}` → `stats.lowest_price/median_price/listing_count`,
+client ID from https://seatgeek.com/account/develop) polled every few hours
+for events at user-selected venues, written into the same `daily_prices`
+table. Train on the bulk dataset; keep "today's price" fresh via the API.
 
 ---
 
-## 7. React frontend
+## 8. Build order
 
-```
-src/
-  api/client.ts          typed fetch wrappers for the API above
-  pages/
-    VenueSearch.tsx      search box + state filter + results
-    VenueDetail.tsx      upcoming events at the venue
-    EventDetail.tsx      the money page: chart + recommendation
-  components/
-    RecommendationCard.tsx   BUY NOW / WAIT / MONITOR + confidence + reasoning
-    PriceChart.tsx           Recharts line chart of median/lowest price
-    VenueCard.tsx
-```
-
-Build order:
-
-1. **VenueSearch** — debounced text input (300 ms) hitting `/api/venues?q=`,
-   plus a state dropdown for "across the country" browsing. Selecting a venue
-   calls `POST /api/track` and navigates to VenueDetail. (A map view with
-   react-leaflet is a nice v2; a list is fine for v1.)
-2. **VenueDetail** — list of upcoming concerts with date, performer, current
-   lowest price, and a small recommendation badge.
-3. **EventDetail** — the core screen:
-   - `RecommendationCard`: big verdict ("WAIT — prices falling ~$4/day,
-     typical bottom is 6–10 days out"), confidence, and the reasoning text
-     straight from the `predictions` row.
-   - `PriceChart`: `median_price` and `lowest_price` from
-     `/api/events/:id/prices`, with a shaded band for the predicted best
-     window and a dashed line at face value if known.
-   - Honest empty state: "Tracking started today — check back in a few days"
-     when snapshots are sparse. Do not fake a confident prediction without data.
-4. Use React Query (TanStack Query) for fetching/caching; it eliminates most
-   loading-state boilerplate.
-
----
-
-## 8. Build order & milestones
-
-| Week | Milestone |
+| Step | Milestone |
 |------|-----------|
-| 1    | Repo scaffolding (Vite + Express + Postgres). Get SeatGeek key. **Ship the polling worker** tracking ~50 big venues. Data starts accumulating. |
-| 2    | API endpoints + VenueSearch/VenueDetail pages. Heuristic predictor + RecommendationCard. |
-| 3    | EventDetail with PriceChart. Deploy (Vercel + Railway). Nightly prediction job. |
-| 4+   | Add Ticketmaster for coverage/face values. Email/push price alerts. |
-| 8+   | Train the Phase-2 model on your accumulated snapshots. Backtest against completed events before trusting it. |
-
----
-
-## 9. Rules of the road
-
-- **No automated purchasing, ever.** The BOTS Act prohibits circumventing
-  purchase controls; platforms ban automated checkout. TixTime recommends,
-  humans buy. Link users out to the ticketing page instead.
-- **Respect API terms**: keep keys server-side, honor rate limits, and check
-  each API's attribution requirements (SeatGeek requires attribution/linkback).
-- **Don't scrape** sites that prohibit it. The official APIs are sufficient.
-- **Be honest in the UI** about confidence and data sparsity. A wrong "BUY
-  NOW" that users trusted is worse than "we're still collecting data."
+| 1 | **Verify the full dataset**: request access from Rebrowser, confirm prices are populated and concerts are covered. This is the go/no-go gate. |
+| 2 | Ingestion: Parquet → Postgres → `daily_prices`. Notebook 01: EDA — plot median price vs. days-until-event for a few dozen concerts; confirm the price curves actually have exploitable shape. |
+| 3 | Notebooks 02–03 + `train.py`: features, DecisionTree baseline, event-grouped split, backtest the buy-date claim. |
+| 4 | FastAPI: model loading, sweep endpoint, venue/event endpoints. |
+| 5 | React: VenueSearch → VenueDetail → EventDetail with history+forecast chart. |
+| 6 | Cron: daily ingest, weekly retrain. Deploy (web: Vercel; api+jobs: Railway/Render — the airline repo's host works fine here too). |
+| 7 | Upgrade DecisionTree → RandomForest/LightGBM; add the API poller (§7) for freshness. |

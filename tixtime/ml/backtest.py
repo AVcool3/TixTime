@@ -23,10 +23,24 @@ event day if it never does). That is what a user following the site would
 actually experience, including the cost of being told to wait too long.
 
 Baselines it has to beat:
-  BUY_NOW    buy on the first day considered -- what you do with no tool
+  BUY_NOW      buy on the first day considered -- what you do with no tool
+  ALWAYS_WAIT  never buy until event day. This is the ZERO-SKILL baseline and
+               it matters more than any of the others: the simulated market
+               declines into game day for ~70% of events, so simply waiting
+               scores ~70% "within 5% of the best price" all on its own. Any
+               hit-rate figure that is not compared against this number is
+               meaningless, and an earlier version of this report led with
+               exactly that meaningless figure.
   FIXED_7/14/30  the folk heuristics ("buy two weeks out")
-  ORACLE     perfect hindsight; the best achievable, so regret against it is
-             the honest measure of how much of the opportunity was captured
+  ORACLE       perfect hindsight; the best achievable, so regret against it is
+               the honest measure of how much of the opportunity was captured
+
+WHERE THE MODEL'S SKILL ACTUALLY IS
+-----------------------------------
+Not in the hit rate -- ALWAYS_WAIT matches it. It is in the mean price paid:
+waiting to event day is right most of the time but catastrophic on the events
+that run up, and the model's job is to identify those. Judge it on mean_paid
+and savings_captured, not on hit_rate_within_5pct.
 
 HONEST READING
 --------------
@@ -99,8 +113,14 @@ def _simulate(
         "start_days": start_days,
         "oracle": oracle,
         "BUY_NOW": buy_now,
+        # The zero-skill comparator: hold until the doors open.
+        "ALWAYS_WAIT": float(prices[-1]),
         "MODEL": model_paid,
         "MODEL_days_waited": int(days[0] - days[model_index]),
+        # True when the model never emitted a BUY and the harness fell through
+        # to the last day -- i.e. the decision was ALWAYS_WAIT wearing the
+        # model's name. Reported, because it is most of them.
+        "MODEL_fell_through": bool(buy_indices.size == 0),
     }
     for fixed in (7, 14, 30):
         if fixed > start_days:
@@ -177,7 +197,7 @@ def run(
         "overall": {},
     }
 
-    strategy_columns = ["BUY_NOW", "MODEL", "FIXED_7", "FIXED_14", "FIXED_30"]
+    strategy_columns = ["BUY_NOW", "ALWAYS_WAIT", "MODEL", "FIXED_7", "FIXED_14", "FIXED_30"]
 
     def summarise(block: pd.DataFrame) -> dict:
         oracle = block["oracle"].to_numpy()
@@ -223,20 +243,36 @@ def run(
             report["by_start_window"][str(start)] = summarise(block)
 
     report["model_days_waited_median"] = float(frame["MODEL_days_waited"].median())
+    report["model_fall_through_rate"] = float(frame["MODEL_fell_through"].mean())
+    report["honest_reading"] = (
+        "Judge the model on mean_paid and savings_captured, NOT on "
+        "hit_rate_within_5pct: the zero-skill ALWAYS_WAIT baseline scores about "
+        "the same hit rate, because the simulated market declines into event day "
+        "for most events. The model's edge is that it leaves early on the "
+        "minority of events that run up, which is where waiting is expensive. "
+        f"Note also that {frame['MODEL_fell_through'].mean():.0%} of MODEL decisions "
+        "never produced a BUY signal and fell through to event day, and that the "
+        "FIXED_T rows are scored on fewer decisions than MODEL (a FIXED_30 rule is "
+        "undefined for a decision starting 14 days out), so their n differs."
+    )
 
     (REPORT_DIR / "backtest.json").write_text(json.dumps(report, indent=2))
 
     if verbose:
         print(f"\n{len(frame):,} decisions over {report['n_events']:,} events\n")
-        header = f"{'strategy':<10} {'mean paid':>10} {'regret':>9} {'regret%':>8} {'captured':>9} {'hit@5%':>7}"
+        header = (f"{'strategy':<12} {'mean paid':>10} {'regret':>9} {'captured':>9} "
+                  f"{'hit@5%':>7} {'n':>7}")
         print(header)
         print("-" * len(header))
         for name, stats in report["overall"].items():
             print(
-                f"{name:<10} {stats['mean_paid']:>10.2f} {stats['mean_regret']:>9.2f} "
-                f"{stats['mean_regret_pct']:>7.1%} {stats['savings_captured_pct']:>9.1%} "
-                f"{stats['hit_rate_within_5pct']:>7.1%}"
+                f"{name:<12} {stats['mean_paid']:>10.2f} {stats['mean_regret']:>9.2f} "
+                f"{stats['savings_captured_pct']:>9.1%} "
+                f"{stats['hit_rate_within_5pct']:>7.1%} {stats['n']:>7,}"
             )
+        print(f"\n{report['model_fall_through_rate']:.0%} of MODEL decisions never produced a "
+              f"BUY signal and fell through to event day.")
+        print("hit@5% is NOT the metric to judge on -- compare MODEL to ALWAYS_WAIT there.")
         print(f"\nwrote {REPORT_DIR / 'backtest.json'}")
     return report
 

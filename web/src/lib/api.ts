@@ -156,6 +156,8 @@ export interface Accuracy extends Provenance {
     overall: Record<string, StrategyStats>;
     by_start_window: Record<string, Record<string, StrategyStats>>;
     model_days_waited_median: number;
+    model_fall_through_rate?: number;
+    honest_reading?: string;
   } | null;
   training: {
     model_version: string; trained_through: string; n_train_events: number;

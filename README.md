@@ -44,23 +44,37 @@ Backtest over all 3,000 held-out events (53,696 scored decisions):
 | Strategy | Mean paid | Overpay vs perfect | Savings captured | Within 5% of best |
 |---|---|---|---|---|
 | Buy immediately | $146.60 | $13.22 | 0.0% | 28.7% |
-| **Follow TixTime** | **$140.12** | **$6.75** | **49.0%** | **69.9%** |
+| Never buy until event day | $155.61 | $22.24 | −68.2% | **68.2%** |
+| **Follow TixTime** | **$140.12** | **$6.75** | **49.0%** | 69.9% |
 | Wait until 30 days out | $141.40 | $9.45 | 39.1% | 38.6% |
 | Wait until 14 days out | $144.01 | $10.64 | 19.6% | 33.3% |
 | Wait until 7 days out | $147.55 | $14.18 | −7.2% | 28.1% |
 
-On smaller 250-event samples the savings-captured figure moves between 44% and
-50% while the best fixed rule sits at 41–43%, so on *that* metric the margin is
-sometimes narrow. The hit-rate advantage is the robust one: the model lands
-within 5% of the best available price roughly 70% of the time against 39% for
-the best heuristic, across every sample tested.
+**Read the "within 5% of best" column with suspicion — it is a trap.** An
+adversarial audit of this project caught the earlier version of this README
+leading with it. A strategy involving no model at all — *never buy until event
+day* — scores 68.2% there, against TixTime's 69.9%. On that metric the model has
+essentially no edge, because the simulated market declines into event day for
+~70% of events, so simply waiting is usually right.
+
+The edge is in what you **pay**. Never-waiting averages $155.61 — worse than
+buying immediately — because it is ruinous on the minority of events that run
+up. The model averages $140.12, the best of any strategy, because it leaves
+early on exactly those events.
+
+Two more things the audit surfaced that belong here rather than in a footnote:
+**57% of the model's decisions never produced a buy signal at all** and fell
+through to event day, so more than half of the MODEL column is the never-wait
+strategy wearing the model's name — the skill is concentrated in the other 43%.
+And the FIXED_30 row is scored on 40,272 decisions rather than 53,696, because a
+"buy at 30 days out" rule is undefined for a decision starting 14 days out, so
+that comparison is not quite like-for-like.
 
 **Legitimate reading:** the pipeline recovers timing structure it was not shown.
 The model trains only on events that finished before the clock date and is
 scored on later ones; it is scored as a *policy* (ask daily, buy on the first
-BUY signal), not as a single lucky prediction; and it beats every fixed
-heuristic including the best one. Note that "wait until 7 days out" is *worse*
-than buying immediately.
+BUY signal), not as a single lucky prediction; and on mean price paid it beats
+every baseline including the zero-skill one.
 
 **Not legitimate:** treating these as a claim about real ticket markets. A model
 trained on a simulator learns the simulator. The only way to know whether this

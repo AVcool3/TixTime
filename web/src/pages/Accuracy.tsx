@@ -8,6 +8,7 @@ import { Empty, Loading, Price, Stat, formatPct } from '../components/Primitives
 
 const STRATEGY_LABELS: Record<string, string> = {
   BUY_NOW: 'Buy immediately',
+  ALWAYS_WAIT: 'Never buy until event day',
   MODEL: 'Follow TixTime',
   FIXED_7: 'Wait until 7 days out',
   FIXED_14: 'Wait until 14 days out',
@@ -84,9 +85,10 @@ export function Accuracy() {
           tone="good"
         />
         <Stat
-          label="Buys within 5% of the best price"
-          value={formatPct(model.hit_rate_within_5pct, 1)}
-          note={`buying immediately: ${formatPct(buyNow.hit_rate_within_5pct, 1)}`}
+          label="Mean price paid"
+          value={<Price value={model.mean_paid} source="synthetic_v1" size="lg" />}
+          note={`buy now $${buyNow.mean_paid.toFixed(0)} · never buy until event day $${
+            (backtest.overall.ALWAYS_WAIT?.mean_paid ?? 0).toFixed(0)}`}
           tone="good"
         />
         <Stat
@@ -101,6 +103,34 @@ export function Accuracy() {
         />
       </div>
 
+      {/* The single most important caveat on this page. An earlier version led
+          with the hit rate, which a zero-skill strategy matches. */}
+      {backtest.overall.ALWAYS_WAIT ? (
+        <div
+          className="card card-pad"
+          style={{ marginBottom: 16, borderColor: 'rgba(201,133,0,.45)', background: 'var(--status-warn-dim)' }}
+        >
+          <h3 style={{ marginBottom: 6, color: '#fff' }}>Don’t judge this on the hit rate</h3>
+          <p className="small" style={{ margin: 0, color: '#f0d9a8', lineHeight: 1.6 }}>
+            A strategy with no model at all — <strong>never buy until event day</strong> — lands
+            within 5% of the best price {formatPct(backtest.overall.ALWAYS_WAIT.hit_rate_within_5pct, 1)}
+            {' '}of the time, against TixTime’s {formatPct(model.hit_rate_within_5pct, 1)}. On that
+            metric the model has almost no edge, because prices fall into event day for most events.
+            {' '}The edge shows up in what you <em>pay</em>: never-wait averages{' '}
+            <strong>${backtest.overall.ALWAYS_WAIT.mean_paid.toFixed(0)}</strong> because it is
+            ruinous on the minority of events that run up, versus{' '}
+            <strong>${model.mean_paid.toFixed(0)}</strong> following the model. Judge this page on
+            mean paid and savings captured.
+            {backtest.model_fall_through_rate !== undefined ? (
+              <>
+                {' '}Note too that {formatPct(backtest.model_fall_through_rate, 0)} of the model’s
+                decisions never produced a buy signal at all and fell through to event day.
+              </>
+            ) : null}
+          </p>
+        </div>
+      ) : null}
+
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-head">
           <h2>Share of the achievable saving each strategy captured</h2>
@@ -111,7 +141,7 @@ export function Accuracy() {
             <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 56, top: 4, bottom: 4 }}>
               <CartesianGrid stroke="rgba(255,255,255,.055)" horizontal={false} />
               <XAxis
-                type="number" domain={[-10, 100]}
+                type="number" domain={[-110, 100]}
                 tickFormatter={(v) => `${v}%`}
                 stroke="var(--text-muted)" tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
                 tickLine={false} axisLine={false}
@@ -144,8 +174,9 @@ export function Accuracy() {
             </BarChart>
           </ResponsiveContainer>
           <p className="tiny muted" style={{ marginTop: 4 }}>
-            “Wait until 7 days out” scores below zero: it is worse than simply buying when you
-            first look, because most events bottom either much earlier or right at the door.
+            Negative bars are worse than simply buying when you first look. “Never buy until event
+            day” scores worst of all despite its high hit rate — it is right most of the time and
+            very expensive when it is wrong.
           </p>
         </div>
       </div>

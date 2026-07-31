@@ -33,6 +33,7 @@ def generate(
         events = con.execute(
             """
             SELECT e.event_id, e.event_date, e.horizon_days, e.league, e.is_ga,
+                   e.has_seat_tiers,
                    e.postseason_tier, e.demand_rank, e.home_demand_index,
                    e.away_demand_index, v.archetype
             FROM events e

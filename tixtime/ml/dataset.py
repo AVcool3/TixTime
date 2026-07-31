@@ -21,7 +21,7 @@ def load_events(con, modelable_only: bool = True) -> pd.DataFrame:
         f"""
         SELECT e.event_id, e.name, e.league, e.event_type, e.postseason_tier,
                e.event_date, e.event_datetime_utc, e.announce_date, e.is_ga,
-               e.seat_selection, e.horizon_days, e.url, e.venue_id,
+               e.seat_selection, e.has_seat_tiers, e.horizon_days, e.url, e.venue_id,
                e.home_team, e.away_team, e.is_tbd, e.is_modelable,
                e.exclusion_reason,
                v.venue_name, v.city, v.region, v.archetype, v.capacity

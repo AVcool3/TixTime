@@ -112,6 +112,12 @@ def build_frames(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataF
         }
     )
 
+    # SeatGeek tells us directly whether a seat can be chosen. GA events have
+    # no sections, and seatSelectionEnabled=0 means the marketplace sells the
+    # event without seat choice -- inventing Lower Bowl / Upper Deck bands for
+    # either would fabricate inventory that does not exist.
+    events["has_seat_tiers"] = events["seat_selection"] & ~events["is_ga"]
+
     # --- modelling window -------------------------------------------------
     # History runs from the announce date (when resale listings realistically
     # appear) to the event, capped at max_lead_days.

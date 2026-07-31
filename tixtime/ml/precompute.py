@@ -128,19 +128,32 @@ def build(warehouse_path: Path = WAREHOUSE, as_of: date | None = None, verbose: 
     # trained input) and take the argmin of the median curve.
     best_horizon = np.zeros(len(decision), dtype=int)
     best_price = np.full(len(decision), np.inf)
-    for horizon in _CURVE_HORIZONS:
-        applicable = decision["days_until_event"].to_numpy() >= horizon
+    days_left = decision["days_until_event"].to_numpy()
+
+    # `None` means "each row's own event day". Serving evaluates that horizon
+    # too, and without it here the two disagree: the event page headline said
+    # the trough was on event day while the seat table, read from this board,
+    # said five days earlier.
+    for horizon in (*_CURVE_HORIZONS, None):
+        if horizon is None:
+            horizons = days_left
+            applicable = days_left > 0
+        else:
+            horizons = np.full(len(decision), horizon)
+            applicable = days_left >= horizon
         if not applicable.any():
             continue
         block = decision.copy()
-        block["horizon_days"] = horizon
-        block["days_until_event_target"] = block["days_until_event"] - horizon
-        block["target_date"] = pd.to_datetime(block["as_of_date"]) + pd.Timedelta(days=int(horizon))
+        block["horizon_days"] = horizons
+        block["days_until_event_target"] = block["days_until_event"] - horizons
+        block["target_date"] = pd.to_datetime(block["as_of_date"]) + pd.to_timedelta(
+            horizons, unit="D"
+        )
         matrix = _align_categories(design_matrix(block), artifact)
         predicted = block["get_in_price"].to_numpy() * np.exp(models["q50"].predict(matrix))
         improved = applicable & (predicted < best_price)
         best_price = np.where(improved, predicted, best_price)
-        best_horizon = np.where(improved, horizon, best_horizon)
+        best_horizon = np.where(improved, horizons, best_horizon)
 
     price_now = decision["get_in_price"].to_numpy()
     predicted_min = price_now * np.exp(decision["predicted_min_return"].to_numpy())

@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS events (
     is_tbd               BOOLEAN NOT NULL,
     is_ga                BOOLEAN NOT NULL,
     seat_selection       BOOLEAN NOT NULL,
+    has_seat_tiers       BOOLEAN NOT NULL,  -- seat_selection AND NOT is_ga
     announce_date        DATE,
     visible_at           DATE,
     lead_days            INTEGER,          -- announce -> event

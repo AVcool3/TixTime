@@ -78,7 +78,15 @@ def _align_categories(matrix: pd.DataFrame, artifact: dict) -> pd.DataFrame:
     """
     aligned = matrix.copy()
     for column, categories in artifact["categories"].items():
-        aligned[column] = pd.Categorical(aligned[column], categories=categories)
+        values = aligned[column].astype(object)
+        # Map anything the model never saw to NaN explicitly. Passing unseen
+        # values straight to pd.Categorical silently coerces them and is
+        # deprecated (it raises in a future pandas); HistGradientBoosting
+        # handles NaN natively, so an unseen league or postseason tier degrades
+        # to "no information" instead of quietly meaning another category.
+        known = set(categories)
+        values = values.where(values.isin(known), other=None)
+        aligned[column] = pd.Categorical(values, categories=categories)
     return aligned
 
 
@@ -116,8 +124,13 @@ def forecast_curve(
         return []
 
     horizons = [h for h in _CURVE_HORIZONS if h <= days_left]
-    if not horizons:
-        horizons = [days_left]
+    # Always terminate on event day. Without this the curve stops at the last
+    # tabulated horizon below days_left -- a 57-day-out event drew a forecast
+    # ending 5 days early, and the recommended buy window sat clipped against
+    # the right edge of the chart.
+    if days_left not in horizons:
+        horizons.append(days_left)
+    horizons = sorted(set(horizons))
 
     rows = pd.concat([current.assign(horizon_days=h) for h in horizons], ignore_index=True)
     rows["days_until_event_target"] = rows["days_until_event"] - rows["horizon_days"]

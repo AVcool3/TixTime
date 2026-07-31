@@ -276,7 +276,9 @@ def simulate_event(event: pd.Series, seed: int = SIMULATION.seed) -> pd.DataFram
     is_burn_in = days > horizon
     as_of = pd.Timestamp(event["event_date"]) - pd.to_timedelta(days, unit="D")
 
-    tiers = tiers_for_event(event.get("league"), event.get("archetype"), bool(event["is_ga"]))
+    # Single tier unless the catalogue says seats are actually selectable.
+    single_tier = not bool(event.get("has_seat_tiers", not event["is_ga"]))
+    tiers = tiers_for_event(event.get("league"), event.get("archetype"), single_tier)
 
     # Shared across tiers: the whole event moves together, so a shock hits
     # every section at once. Tier-specific noise is added on top.

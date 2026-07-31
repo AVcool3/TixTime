@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Deal, api, tierColor } from '../lib/api';
 import { useClock } from '../lib/clock';
-import { Empty, Loading, Price, Stat, formatDate, formatPct } from '../components/Primitives';
+import { BoardStaleNotice, Empty, Loading, Price, Stat, formatDate, formatPct } from '../components/Primitives';
 
 /**
  * The cross-event view.
@@ -18,6 +18,7 @@ export function DealRadar() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [boardNote, setBoardNote] = useState<string | undefined>();
   const [league, setLeague] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [minSaving, setMinSaving] = useState('0.15');
@@ -47,6 +48,7 @@ export function DealRadar() {
         if (cancelled) return;
         setDeals(response.deals);
         setTotal(response.total);
+        setBoardNote(response.board_covers_as_of === false ? response.board_note : undefined);
       })
       .catch(() => { if (!cancelled) { setDeals([]); setTotal(0); } })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -68,6 +70,8 @@ export function DealRadar() {
           </p>
         </div>
       </div>
+
+      <BoardStaleNotice note={boardNote} />
 
       <div className="stat-row" style={{ marginBottom: 16 }}>
         <Stat label="Ranked opportunities" value={total.toLocaleString()} note={`at ≥${formatPct(Number(minSaving))} projected saving`} />

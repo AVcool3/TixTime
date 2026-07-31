@@ -170,6 +170,27 @@ export function UnforecastableNotice({ reason }: { reason: string | null }) {
   );
 }
 
+/** Shown whenever the clock sits off the precomputed board's date. Being
+ * explicit here is the point: the alternative is silently serving rankings
+ * derived from prices dated after the date the page claims. */
+export function BoardStaleNotice({ note }: { note?: string }) {
+  if (!note) return null;
+  return (
+    <div
+      className="card card-pad small"
+      style={{
+        marginBottom: 14,
+        borderColor: 'rgba(201,133,0,.45)',
+        background: 'var(--status-warn-dim)',
+        color: '#f0d9a8',
+      }}
+    >
+      <strong style={{ color: '#fff' }}>Rankings unavailable at this clock date. </strong>
+      {note}
+    </div>
+  );
+}
+
 export function formatDate(value: string | null | undefined, opts?: Intl.DateTimeFormatOptions) {
   if (!value) return '—';
   const date = new Date(value.length <= 10 ? `${value}T00:00:00` : value);

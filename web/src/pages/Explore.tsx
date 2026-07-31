@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { api, EventSummary, Filters, Meta, tierColor } from '../lib/api';
 import { useClock } from '../lib/clock';
 import {
-  ActionChip, Empty, Loading, Price, Sparkline, Stat, formatDate, formatPct,
+  ActionChip, BoardStaleNotice, Empty, Loading, Price, Sparkline, Stat,
+  formatDate, formatPct,
 } from '../components/Primitives';
 
 const SORTS = [
@@ -31,6 +32,7 @@ export function Explore({ meta }: { meta: Meta | null }) {
 
   const [results, setResults] = useState<EventSummary[]>([]);
   const [total, setTotal] = useState(0);
+  const [boardNote, setBoardNote] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
 
   const limit = 60;
@@ -62,6 +64,7 @@ export function Explore({ meta }: { meta: Meta | null }) {
         if (cancelled) return;
         setResults(response.results);
         setTotal(response.total);
+        setBoardNote(response.board_covers_as_of === false ? response.board_note : undefined);
       })
       .catch(() => { if (!cancelled) { setResults([]); setTotal(0); } })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -92,6 +95,8 @@ export function Explore({ meta }: { meta: Meta | null }) {
           </p>
         </div>
       </div>
+
+      <BoardStaleNotice note={boardNote} />
 
       <div className="layout-rail">
         <aside className="card card-pad" style={{ position: 'sticky', top: 74 }}>

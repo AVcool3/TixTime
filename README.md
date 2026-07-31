@@ -39,15 +39,21 @@ than an oversight.
 
 ### What the accuracy numbers mean
 
-Backtest results (500 events the model never saw, ~8,900 scored decisions):
+Backtest over all 3,000 held-out events (53,696 scored decisions):
 
 | Strategy | Mean paid | Overpay vs perfect | Savings captured | Within 5% of best |
 |---|---|---|---|---|
-| Buy immediately | $146.26 | $13.11 | 0.0% | 29.4% |
-| **Follow TixTime** | **$140.11** | **$6.96** | **46.9%** | **68.2%** |
-| Wait until 30 days out | $141.20 | $9.38 | 39.1% | 39.2% |
-| Wait until 14 days out | $143.42 | $10.27 | 21.7% | 35.5% |
-| Wait until 7 days out | $147.13 | $13.98 | −6.6% | 29.1% |
+| Buy immediately | $146.60 | $13.22 | 0.0% | 28.7% |
+| **Follow TixTime** | **$140.12** | **$6.75** | **49.0%** | **69.9%** |
+| Wait until 30 days out | $141.40 | $9.45 | 39.1% | 38.6% |
+| Wait until 14 days out | $144.01 | $10.64 | 19.6% | 33.3% |
+| Wait until 7 days out | $147.55 | $14.18 | −7.2% | 28.1% |
+
+On smaller 250-event samples the savings-captured figure moves between 44% and
+50% while the best fixed rule sits at 41–43%, so on *that* metric the margin is
+sometimes narrow. The hit-rate advantage is the robust one: the model lands
+within 5% of the best available price roughly 70% of the time against 39% for
+the best heuristic, across every sample tested.
 
 **Legitimate reading:** the pipeline recovers timing structure it was not shown.
 The model trains only on events that finished before the clock date and is

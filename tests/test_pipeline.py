@@ -149,6 +149,30 @@ class TestServingRespectsTheClock:
         assert payload["forecast"], "expected a forecast"
         assert payload["forecast"][-1]["date"] == event_date.isoformat()
 
+    def test_precomputed_board_is_never_served_for_a_different_date(self, client):
+        """The deal board is precomputed for ONE as-of date. Serving it for any
+        other date returned prices, savings and BUY/WAIT signals derived from
+        snapshots dated AFTER the date the response claimed -- a leak straight
+        to the product surface, and the clock control invites moving the clock.
+        """
+        moved = (as_of_date() - timedelta(days=45)).isoformat()
+
+        search = client.get(f"/api/search?as_of={moved}&limit=5").json()
+        assert search["board_covers_as_of"] is False
+        assert search["board_note"]
+        # The catalogue is still browsable, but with no predictions attached.
+        for row in search["results"]:
+            assert row["price_now"] is None
+            assert row["expected_saving"] is None
+            assert row["action"] is None
+            assert row["sparkline"] is None
+
+        assert client.get(f"/api/deals?as_of={moved}&limit=5").json()["deals"] == []
+
+        current = client.get("/api/search?limit=5").json()
+        assert current["board_covers_as_of"] is True
+        assert any(row["price_now"] is not None for row in current["results"])
+
     def test_forecast_band_is_ordered(self, client):
         with db.warehouse(read_only=True) as con:
             event_id = con.execute("SELECT event_id FROM deal_board LIMIT 1").fetchone()[0]

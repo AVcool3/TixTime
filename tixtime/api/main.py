@@ -113,13 +113,37 @@ def _iso(value) -> str | None:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-def _provenance(as_of: date) -> dict[str, Any]:
-    return {
+def board_as_of(con) -> date | None:
+    """The single as-of date the precomputed deal board was built for."""
+    row = con.execute("SELECT max(as_of_date) FROM deal_board").fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _provenance(as_of: date, con=None) -> dict[str, Any]:
+    payload = {
         "as_of": as_of.isoformat(),
         "source": SYNTHETIC_SOURCE,
         "is_simulated": True,
         "disclaimer": DISCLAIMER,
     }
+    if con is not None:
+        # The deal board and sparklines are precomputed for ONE date. Serving
+        # them for a different as_of would hand back predictions derived from
+        # prices after the date the response claims -- and the clock control
+        # actively invites moving the clock. So the board is filtered to its
+        # own date, and the response says plainly when it does not cover the
+        # requested one.
+        built = board_as_of(con)
+        payload["board_as_of"] = built.isoformat() if built else None
+        payload["board_covers_as_of"] = built == as_of
+        if built != as_of:
+            payload["board_note"] = (
+                f"The ranked deal board was built for {built}. Rankings, sparklines and "
+                f"buy signals are unavailable for {as_of}; per-event forecasts on the event "
+                f"page are still computed live and remain correct. Rebuild with "
+                f"`python -m tixtime.ml.precompute --as-of {as_of}`."
+            )
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +175,7 @@ def meta(con=Depends(get_connection), as_of: date = Depends(resolve_as_of)):
         "SELECT detail FROM pipeline_runs WHERE stage='train' ORDER BY ran_at DESC LIMIT 1"
     ).fetchone()
     return {
-        **_provenance(as_of),
+        **_provenance(as_of, con),
         "catalogue": {
             "events": counts[0],
             "modelable_events": counts[1],
@@ -185,7 +209,7 @@ def filters(con=Depends(get_connection), as_of: date = Depends(resolve_as_of)):
         ]
 
     return {
-        **_provenance(as_of),
+        **_provenance(as_of, con),
         "leagues": facet(
             "SELECT league, upper(league), count(*) FROM events "
             "WHERE event_date > ? AND league IS NOT NULL GROUP BY 1,2 ORDER BY 3 DESC"
@@ -227,6 +251,7 @@ FROM events e
 JOIN venues v USING (venue_id)
 LEFT JOIN (
     SELECT * FROM deal_board
+    WHERE as_of_date = ?
     QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY expected_saving_pct DESC) = 1
 ) d ON d.event_id = e.event_id
 LEFT JOIN event_sparkline s ON s.event_id = e.event_id AND s.tier_key = d.tier_key
@@ -303,9 +328,17 @@ def search(
     limit: int = Query(60, le=200),
     offset: int = 0,
 ):
-    clauses, params = [], [as_of]
-    if not include_unforecastable:
+    # First param feeds the deal_board subquery, second the event_date filter.
+    clauses, params = [], [as_of, as_of]
+    # When the board does not cover this date there are no predictions to
+    # filter on, so fall back to the catalogue rather than returning nothing:
+    # the events are still browsable and their per-event forecasts are still
+    # computed live and correct.
+    board_current = board_as_of(con) == as_of
+    if not include_unforecastable and board_current:
         clauses.append("e.is_modelable AND d.price_now IS NOT NULL")
+    elif not include_unforecastable:
+        clauses.append("e.is_modelable")
     if q:
         clauses.append(
             "(lower(e.name) LIKE ? OR lower(v.venue_name) LIKE ? OR lower(v.city) LIKE ?)"
@@ -347,7 +380,7 @@ def search(
     ).df())
 
     return {
-        **_provenance(as_of),
+        **_provenance(as_of, con),
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -377,8 +410,8 @@ def deals(
     across events, not a per-event lookup -- so it is served from the
     precomputed deal_board rather than by fanning out model calls.
     """
-    clauses = ["e.event_date > ?", "d.expected_saving_pct >= ?"]
-    params: list = [as_of, min_saving_pct]
+    clauses = ["e.event_date > ?", "d.expected_saving_pct >= ?", "d.as_of_date = ?"]
+    params: list = [as_of, min_saving_pct, as_of]
     if league:
         clauses.append("e.league = ?"); params.append(league)
     if city:
@@ -429,7 +462,7 @@ def deals(
                 "is_simulated": True,
             }
         )
-    return {**_provenance(as_of), "total": total, "limit": limit, "offset": offset, "deals": records}
+    return {**_provenance(as_of, con), "total": total, "limit": limit, "offset": offset, "deals": records}
 
 
 # ---------------------------------------------------------------------------
@@ -456,9 +489,9 @@ def event_detail(event_id: int, con=Depends(get_connection), as_of: date = Depen
         FROM deal_board d
         LEFT JOIN seat_tiers t ON t.tier_key = d.tier_key
              AND t.archetype = (SELECT archetype FROM venues WHERE venue_id = ?)
-        WHERE d.event_id = ? ORDER BY t.tier_rank NULLS LAST
+        WHERE d.event_id = ? AND d.as_of_date = ? ORDER BY t.tier_rank NULLS LAST
         """,
-        [row["venue_id"], event_id],
+        [row["venue_id"], event_id, as_of],
     ).df()
     board = _records(board)
 
@@ -474,7 +507,7 @@ def event_detail(event_id: int, con=Depends(get_connection), as_of: date = Depen
         forecastable, reason = False, "past_event"
 
     return {
-        **_provenance(as_of),
+        **_provenance(as_of, con),
         "event": {
             "event_id": row["event_id"],
             "name": row["name"],

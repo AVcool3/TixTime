@@ -11,6 +11,11 @@ export interface Provenance {
   source: string;
   is_simulated: boolean;
   disclaimer: string;
+  /** The ranked deal board is precomputed for a single date. When the clock is
+   * moved off that date these say so, rather than serving stale rankings. */
+  board_as_of?: string | null;
+  board_covers_as_of?: boolean;
+  board_note?: string;
 }
 
 export interface Meta extends Provenance {

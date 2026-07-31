@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS price_snapshots (
     median_price      DOUBLE NOT NULL,
     listing_count     INTEGER NOT NULL,
     ticket_count      INTEGER NOT NULL,
+    is_burn_in        BOOLEAN NOT NULL DEFAULT FALSE,
     source            VARCHAR NOT NULL
 );
 

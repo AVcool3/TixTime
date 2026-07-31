@@ -20,21 +20,30 @@ from dataclasses import dataclass
 # ---------------------------------------------------------------------------
 
 ARENA = "arena"
+HOCKEY_ARENA = "hockey_arena"
 BALLPARK = "ballpark"
 FOOTBALL_STADIUM = "football_stadium"
 GENERAL_ADMISSION = "general_admission"
 
+# Seating is a property of the SPORT, not the building: the same arena is
+# courtside for basketball and glass for hockey, with different price gradients.
+# Venues keep a single archetype for geography/capacity, but tier selection is
+# driven by the event's league.
 LEAGUE_ARCHETYPE = {
     "nba": ARENA,
-    "nhl": ARENA,
+    "nhl": HOCKEY_ARENA,
     "mlb": BALLPARK,
     "nfl": FOOTBALL_STADIUM,
 }
+
+# Which archetypes are the same physical building, for venue-level purposes.
+VENUE_ARCHETYPE_ALIAS = {HOCKEY_ARENA: ARENA}
 
 # Typical sellable capacity per archetype. Drives inventory volume in the
 # simulator, which in turn drives how fast prices decay.
 ARCHETYPE_CAPACITY = {
     ARENA: 18_500,
+    HOCKEY_ARENA: 17_800,
     BALLPARK: 41_000,
     FOOTBALL_STADIUM: 68_000,
     GENERAL_ADMISSION: 2_000,
@@ -65,7 +74,7 @@ class SeatTier:
 
 SEAT_TIERS: dict[str, tuple[SeatTier, ...]] = {
     ARENA: (
-        SeatTier("courtside", "Courtside / Glass", 6.40, 0.03, 0.55, 0.92),
+        SeatTier("courtside", "Courtside", 6.40, 0.03, 0.55, 0.92),
         SeatTier("lower_bowl", "Lower Bowl", 2.05, 0.24, 0.85, 0.70),
         SeatTier("club", "Club / Suite Level", 2.70, 0.09, 0.75, 0.62),
         SeatTier("upper_bowl", "Upper Bowl", 0.78, 0.38, 1.25, 0.34),
@@ -85,6 +94,13 @@ SEAT_TIERS: dict[str, tuple[SeatTier, ...]] = {
         SeatTier("upper_sideline", "Upper Sideline", 0.95, 0.34, 1.22, 0.36),
         SeatTier("upper_endzone", "Upper End Zone", 0.62, 0.34, 1.42, 0.20),
     ),
+    HOCKEY_ARENA: (
+        SeatTier("glass", "Glass / Rinkside", 4.80, 0.04, 0.58, 0.90),
+        SeatTier("lower_bowl", "Lower Bowl", 1.95, 0.26, 0.86, 0.68),
+        SeatTier("club", "Club / Suite Level", 2.55, 0.09, 0.76, 0.60),
+        SeatTier("upper_bowl", "Upper Bowl", 0.80, 0.37, 1.24, 0.33),
+        SeatTier("upper_end", "Upper End / Behind Net", 0.58, 0.24, 1.38, 0.21),
+    ),
     GENERAL_ADMISSION: (
         SeatTier("ga", "General Admission", 1.00, 1.00, 1.10, 0.40),
     ),
@@ -95,6 +111,22 @@ def tiers_for(archetype: str, is_ga: bool) -> tuple[SeatTier, ...]:
     """Seat tiers for a venue archetype; GA events collapse to a single tier."""
     if is_ga:
         return SEAT_TIERS[GENERAL_ADMISSION]
+    return SEAT_TIERS.get(archetype, SEAT_TIERS[GENERAL_ADMISSION])
+
+
+def tiers_for_event(league: str | None, archetype: str | None, is_ga: bool) -> tuple[SeatTier, ...]:
+    """Seat tiers for an event.
+
+    League wins over the venue's archetype, so a hockey game in a shared arena
+    gets Glass/Lower/Club/Upper rather than Courtside. GA events and anything
+    without a recognised league collapse to a single tier -- fabricating
+    sections for a stadium tour or a general-admission event would invent
+    inventory that does not exist.
+    """
+    if is_ga:
+        return SEAT_TIERS[GENERAL_ADMISSION]
+    if isinstance(league, str) and league in LEAGUE_ARCHETYPE:
+        return SEAT_TIERS[LEAGUE_ARCHETYPE[league]]
     return SEAT_TIERS.get(archetype, SEAT_TIERS[GENERAL_ADMISSION])
 
 

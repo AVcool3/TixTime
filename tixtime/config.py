@@ -33,7 +33,18 @@ WAREHOUSE = DATA_DIR / "tixtime.duckdb"
 #
 # This is not a hack to hide the data's age -- it is the same mechanism the
 # backtester uses to replay any past date, and the UI displays it prominently.
-DEFAULT_AS_OF = date(2025, 11, 1)
+#
+# 2026-02-15 is chosen to balance both sides of the clock, and the balance is
+# what makes the date load-bearing:
+#   * events BEFORE it have fully-realised price paths, which is the only
+#     legitimate training set (a buy-signal label needs the whole remaining
+#     path, so an event still in progress at the cutoff yields a censored,
+#     upward-biased label);
+#   * events AFTER it are what the site actually recommends on.
+# At this date that split is 1,987 complete / 3,113 upcoming modelable events.
+# An earlier clock such as 2025-11-01 leaves almost nothing complete to train
+# on, because the catalogue itself only opens on 2025-10-10.
+DEFAULT_AS_OF = date(2026, 2, 15)
 
 
 def as_of_date() -> date:
@@ -56,7 +67,13 @@ class SimulationConfig:
     # Snapshots start at the event's real announceDate but never earlier than
     # this many days before the event -- beyond it, resale listings are thin
     # enough that a modelled price is meaningless.
-    max_lead_days: int = 240
+    #
+    # 150 rather than 240 on purpose. Spreading a ~30% decline across 240 days
+    # is a slope of ~0.15%/day, gentler than realistic day-to-day noise, so the
+    # exact trough became noise-driven and nearly half the catalogue appeared
+    # to bottom on the day listings opened. A tighter window also matches where
+    # resale inventory is actually liquid.
+    max_lead_days: int = 150
     # Events with a shorter announce->event window than this are skipped for
     # modelling: too few observations to compute 30-day rolling features.
     min_lead_days: int = 45

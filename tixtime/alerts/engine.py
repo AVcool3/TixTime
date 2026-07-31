@@ -24,6 +24,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 
+import pandas as pd
+
 from tixtime import db
 from tixtime.config import as_of_date
 
@@ -168,6 +170,13 @@ def evaluate(con, as_of: date | None = None) -> list[dict]:
     if rules.empty:
         return []
 
+    # DuckDB returns SQL NULL as pandas NaN, not None. Passing that NaN back as
+    # a query parameter made `CAST(? AS VARCHAR)` render the STRING 'nan',
+    # which is not NULL -- so every "watch any tier" rule (tier_key NULL)
+    # matched no tiers and silently never fired. Normalise NA to None once,
+    # here, rather than guarding at each use.
+    rules = rules.astype(object).where(pd.notna(rules), None)
+
     fired = []
     for rule in rules.itertuples():
         already = con.execute(
@@ -186,7 +195,11 @@ def evaluate(con, as_of: date | None = None) -> list[dict]:
                    ON t.tier_key = d.tier_key
                   AND t.archetype = (SELECT archetype FROM venues v WHERE v.venue_id = e.venue_id)
             WHERE d.event_id = ?
-              AND (? IS NULL OR d.tier_key = ?)
+              -- CAST is required: DuckDB types a bare `? IS NULL` placeholder
+              -- as DOUBLE, then tries to cast tier_key to DOUBLE and fails
+              -- with "Could not convert string 'lower_bowl' to DOUBLE".
+              -- Only triggers for rules that watch every tier (tier_key NULL).
+              AND (CAST(? AS VARCHAR) IS NULL OR d.tier_key = CAST(? AS VARCHAR))
             ORDER BY d.expected_saving_pct DESC
             """,
             [rule.event_id, rule.tier_key, rule.tier_key],

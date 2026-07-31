@@ -251,6 +251,39 @@ class TestAlerts:
         client.delete(f"/api/alerts/rules/{rule_id}")
         assert rule_id not in {r["rule_id"] for r in client.get("/api/alerts/rules").json()["rules"] if r["active"]}
 
+        # These tests run against the real warehouse, so they must not leave
+        # rows behind -- otherwise every run adds another synthetic alert to
+        # the user's inbox.
+        with db.warehouse() as con:
+            con.execute("DELETE FROM alert_events WHERE rule_id = ?", [rule_id])
+            con.execute("DELETE FROM alert_rules WHERE rule_id = ?", [rule_id])
+
+    def test_any_tier_rule_matches_every_tier(self, client):
+        """Regression: DuckDB hands SQL NULL back as pandas NaN, and passing
+        that NaN into `CAST(? AS VARCHAR) IS NULL` rendered the string 'nan',
+        so a rule watching ANY tier matched no tiers and silently never fired.
+        It failed with no error, which is why it needs its own test."""
+        with db.warehouse(read_only=True) as con:
+            event_id = con.execute(
+                "SELECT event_id FROM deal_board GROUP BY event_id HAVING count(*) > 1 LIMIT 1"
+            ).fetchone()[0]
+
+        # A rule with tier_key omitted entirely -> NULL in the database.
+        created = client.post(
+            "/api/alerts/rules",
+            json={"event_id": int(event_id), "rule_type": "target_price", "threshold": 100000.0},
+        )
+        rule_id = created.json()["rule_id"]
+        try:
+            fired = client.post("/api/alerts/evaluate").json()["fired"]
+            assert any(a["rule_id"] == rule_id for a in fired), (
+                "an any-tier rule with an unreachable target must still fire"
+            )
+        finally:
+            with db.warehouse() as con:
+                con.execute("DELETE FROM alert_events WHERE rule_id = ?", [rule_id])
+                con.execute("DELETE FROM alert_rules WHERE rule_id = ?", [rule_id])
+
     def test_unknown_rule_type_is_rejected(self, client):
         response = client.post(
             "/api/alerts/rules", json={"event_id": 1, "rule_type": "not_a_rule"}

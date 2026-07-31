@@ -163,7 +163,24 @@ export function EventPage() {
         </div>
 
         {detail.tiers.length === 0 ? (
-          <div className="card-pad"><div className="empty">No tier pricing available.</div></div>
+          <div className="card-pad">
+            <div className="empty" style={{ textAlign: 'left' }}>
+              {event.unforecastable_reason === 'board_not_built' ? (
+                <>
+                  <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                    Per-tier comparison unavailable at this clock date
+                  </div>
+                  <div className="small">
+                    The chart above is computed live and is correct — it is the cross-tier ranking
+                    that comes from the precomputed board, and the board is not built for{' '}
+                    {formatDate(asOf)}.
+                  </div>
+                </>
+              ) : (
+                'No tier pricing available for this event.'
+              )}
+            </div>
+          </div>
         ) : !event.has_seat_tiers ? (
           <div className="card-pad">
             <p className="small secondary" style={{ marginTop: 0 }}>

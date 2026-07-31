@@ -589,7 +589,7 @@ def timeline(
             ).fetchone()
         tier_key = picked[0] if picked else None
     if tier_key is None:
-        return {**_provenance(as_of), "event_id": event_id, "tier_key": None,
+        return {**_provenance(as_of, con), "event_id": event_id, "tier_key": None,
                 "history": [], "forecast": [], "recommendation": None,
                 "unforecastable_reason": "no_snapshots"}
 
@@ -607,7 +607,7 @@ def timeline(
     recommendation = serve.recommend(con, event_id, tier_key, as_of)
 
     return {
-        **_provenance(as_of),
+        **_provenance(as_of, con),
         "event_id": event_id,
         "tier_key": tier_key,
         "history": [
@@ -632,7 +632,7 @@ def timeline(
 @app.get("/api/events/{event_id}/tiers")
 def event_tiers(event_id: int, con=Depends(get_connection), as_of: date = Depends(resolve_as_of)):
     """Per-seat-tier recommendations, best expected saving first."""
-    return {**_provenance(as_of), "event_id": event_id,
+    return {**_provenance(as_of, con), "event_id": event_id,
             "tiers": serve.recommend_all_tiers(con, event_id, as_of)}
 
 
@@ -747,7 +747,7 @@ def delete_alert_rule(rule_id: str, con=Depends(get_connection)):
 
 @app.post("/api/alerts/evaluate")
 def evaluate_alerts(con=Depends(get_connection), as_of: date = Depends(resolve_as_of)):
-    return {**_provenance(as_of), "fired": alerts.evaluate(con, as_of)}
+    return {**_provenance(as_of, con), "fired": alerts.evaluate(con, as_of)}
 
 
 @app.get("/api/alerts")

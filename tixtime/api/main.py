@@ -259,8 +259,8 @@ WHERE e.event_date > ?
 """
 
 
-def _event_row(row: dict, as_of: date) -> dict:
-    forecastable, reason = _forecastability(row)
+def _event_row(row: dict, as_of: date, board_current: bool = True) -> dict:
+    forecastable, reason = _forecastability(row, board_current)
     return {
         "event_id": row["event_id"],
         "name": row["name"],
@@ -294,14 +294,18 @@ def _event_row(row: dict, as_of: date) -> dict:
     }
 
 
-def _forecastability(row: dict) -> tuple[bool, str | None]:
+def _forecastability(row: dict, board_current: bool = True) -> tuple[bool, str | None]:
     """Why an event has no forecast, stated rather than rendered as a blank chart."""
     if row.get("is_tbd"):
         return False, "date_tbd"
     if not row.get("is_modelable"):
         return False, row.get("exclusion_reason") or "not_modelable"
     if row.get("price_now") is None:
-        return False, "no_snapshots"
+        # Distinguish "this event genuinely has no price history" from "the
+        # ranked board simply was not built for this clock date". Conflating
+        # them told the user no observations existed while the chart below
+        # drew a hundred of them.
+        return False, "no_snapshots" if board_current else "board_not_built"
     return True, None
 
 
@@ -384,7 +388,7 @@ def search(
         "total": total,
         "limit": limit,
         "offset": offset,
-        "results": [_event_row(row, as_of) for row in rows],
+        "results": [_event_row(row, as_of, board_current) for row in rows],
     }
 
 
@@ -496,7 +500,8 @@ def event_detail(event_id: int, con=Depends(get_connection), as_of: date = Depen
     board = _records(board)
 
     forecastable, reason = _forecastability(
-        {**row, "price_now": board[0]["price_now"] if board else None}
+        {**row, "price_now": board[0]["price_now"] if board else None},
+        board_current=board_as_of(con) == as_of,
     )
     # row comes straight from a DataFrame here, so event_date is a Timestamp;
     # comparing it to a date raises rather than coercing.
@@ -568,10 +573,20 @@ def timeline(
 
     if tier_key is None:
         picked = con.execute(
-            "SELECT tier_key FROM deal_board WHERE event_id = ? "
+            "SELECT tier_key FROM deal_board WHERE event_id = ? AND as_of_date = ? "
             "ORDER BY expected_saving_pct DESC LIMIT 1",
-            [event_id],
+            [event_id, as_of],
         ).fetchone()
+        # The board only covers one date. Falling back to the snapshots keeps
+        # the price chart rendering at any clock date -- history and forecast
+        # are computed live and stay correct even when the ranked board does
+        # not cover the date.
+        if picked is None:
+            picked = con.execute(
+                "SELECT tier_key FROM price_snapshots WHERE event_id = ? AND NOT is_burn_in "
+                "GROUP BY tier_key ORDER BY min(get_in_price) LIMIT 1",
+                [event_id],
+            ).fetchone()
         tier_key = picked[0] if picked else None
     if tier_key is None:
         return {**_provenance(as_of), "event_id": event_id, "tier_key": None,

@@ -173,6 +173,27 @@ class TestServingRespectsTheClock:
         assert current["board_covers_as_of"] is True
         assert any(row["price_now"] is not None for row in current["results"])
 
+    def test_event_page_still_charts_when_the_board_is_not_built(self, client):
+        """Scoping the board to its own date must not silently blank the chart.
+
+        The first attempt at that fix labelled these events 'no_snapshots' --
+        telling the user no observations existed while the chart below drew a
+        hundred of them -- and then removed the chart entirely because the tier
+        was picked from the board. History and forecast are computed live and
+        stay correct at any clock date; only the ranking is unavailable.
+        """
+        moved = (as_of_date() - timedelta(days=45)).isoformat()
+        event_id = client.get(f"/api/search?as_of={moved}&limit=1").json()["results"][0]["event_id"]
+
+        detail = client.get(f"/api/events/{event_id}?as_of={moved}").json()["event"]
+        assert detail["unforecastable_reason"] == "board_not_built"
+
+        timeline = client.get(f"/api/events/{event_id}/timeline?as_of={moved}").json()
+        assert timeline["tier_key"] is not None
+        assert timeline["history"], "the chart must still render at a moved clock"
+        assert max(p["date"] for p in timeline["history"]) <= moved
+        assert timeline["recommendation"]["action"] in {"BUY_NOW", "WAIT"}
+
     def test_forecast_band_is_ordered(self, client):
         with db.warehouse(read_only=True) as con:
             event_id = con.execute("SELECT event_id FROM deal_board LIMIT 1").fetchone()[0]

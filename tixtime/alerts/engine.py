@@ -195,6 +195,10 @@ def evaluate(con, as_of: date | None = None) -> list[dict]:
                    ON t.tier_key = d.tier_key
                   AND t.archetype = (SELECT archetype FROM venues v WHERE v.venue_id = e.venue_id)
             WHERE d.event_id = ?
+              -- The board is precomputed per date; without this an evaluation
+              -- for an earlier simulated day would fire on prices from after
+              -- the day being evaluated.
+              AND d.as_of_date = ?
               -- CAST is required: DuckDB types a bare `? IS NULL` placeholder
               -- as DOUBLE, then tries to cast tier_key to DOUBLE and fails
               -- with "Could not convert string 'lower_bowl' to DOUBLE".
@@ -202,7 +206,7 @@ def evaluate(con, as_of: date | None = None) -> list[dict]:
               AND (CAST(? AS VARCHAR) IS NULL OR d.tier_key = CAST(? AS VARCHAR))
             ORDER BY d.expected_saving_pct DESC
             """,
-            [rule.event_id, rule.tier_key, rule.tier_key],
+            [rule.event_id, as_of, rule.tier_key, rule.tier_key],
         ).df()
         if board.empty:
             continue

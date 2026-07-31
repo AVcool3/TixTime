@@ -149,6 +149,11 @@ const REASON_COPY: Record<string, { title: string; detail: string }> = {
     title: 'Placeholder event',
     detail: 'A provisional postseason slot with no confirmed date or opponent.',
   },
+  board_not_built: {
+    title: 'Rankings not built for this clock date',
+    detail:
+      'The ranked deal board is precomputed for one date at a time, and the clock is currently set to a different one. The price history and forecast below are still computed live and are correct; only the cross-event ranking and the buy signal are unavailable. Rebuild the board for this date, or move the clock back to the board’s date.',
+  },
   insufficient_lead_time: {
     title: 'Announced too close to the event',
     detail:

@@ -182,7 +182,14 @@ export function Accuracy() {
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-head"><h2>Full strategy comparison</h2></div>
+        <div className="card-head">
+          <h2>Full strategy comparison</h2>
+          {/* An equal-weighted "overpay %" column used to sit here and ranked
+              the strategies in the opposite order to the dollar-weighted
+              savings-captured column beside it, with nothing saying which to
+              believe. Only the dollar-weighted view is shown. */}
+          <span className="tiny muted">dollar-weighted</span>
+        </div>
         <div className="table-scroll">
           <table>
             <thead>
@@ -190,7 +197,6 @@ export function Accuracy() {
                 <th>Strategy</th>
                 <th className="num">Mean paid</th>
                 <th className="num">Overpay vs perfect</th>
-                <th className="num">Overpay %</th>
                 <th className="num">Savings captured</th>
                 <th className="num">Within 5% of best</th>
                 <th className="num">Decisions</th>
@@ -204,7 +210,6 @@ export function Accuracy() {
                   </td>
                   <td className="num"><Price value={stats.mean_paid} source="synthetic_v1" /></td>
                   <td className="num"><Price value={stats.mean_regret} source="synthetic_v1" /></td>
-                  <td className="num">{formatPct(stats.mean_regret_pct, 1)}</td>
                   <td className="num" style={{ color: stats.savings_captured_pct > 0 ? 'var(--status-good)' : 'var(--status-critical)' }}>
                     {formatPct(stats.savings_captured_pct, 1)}
                   </td>

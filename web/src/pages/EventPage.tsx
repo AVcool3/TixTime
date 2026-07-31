@@ -195,7 +195,13 @@ export function EventPage() {
             {activeTier ? (
               <span className="chip">
                 Then filter to <strong style={{ marginLeft: 4 }}>{activeTier.tier_label}</strong>
-                {' '}· target ≈ ${activeTier.forecast_min.toFixed(0)}–${activeTier.price_now.toFixed(0)}
+                {' '}· target{' '}
+                {/* Through <Price>, not a raw toFixed: this is the highest-trust
+                    moment in the product and the figure must carry its
+                    provenance like every other price on the site. */}
+                <Price value={activeTier.forecast_min} source={activeTier.source} size="sm" />
+                {'–'}
+                <Price value={activeTier.price_now} source={activeTier.source} size="sm" />
               </span>
             ) : null}
             <button onClick={() => setAlertOpen(true)}>Alert me when the model says buy</button>

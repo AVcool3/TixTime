@@ -1,0 +1,267 @@
+/* TixTime design system.
+ *
+ * Dark market-terminal surface. The categorical series palette is the
+ * validated default from the data-viz reference instance, dark-mode steps --
+ * it clears the lightness band, chroma floor, adjacent-pair CVD separation,
+ * normal-vision floor and 3:1 contrast against this surface.
+ *
+ * Colour discipline for the price chart: HUE CARRIES SEAT TIER, nothing else.
+ * Past versus future is encoded by line style, band presence and a surface
+ * tint change -- never by hue -- so the two dimensions never compete.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --surface-0: #0e0f12;
+  --surface-1: #1a1a19;
+  --surface-2: #212227;
+  --surface-3: #2b2d33;
+  --surface-raised: #191b1f;
+  --border: #33353d;
+  --border-strong: #464954;
+
+  /* ink */
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8b8c93;
+
+  /* categorical series (seat tiers), fixed order, never cycled */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+
+  /* status -- reserved, never reused as a series colour */
+  --status-good: #199e70;
+  --status-good-dim: rgba(25, 158, 112, 0.16);
+  --status-warn: #c98500;
+  --status-warn-dim: rgba(201, 133, 0, 0.16);
+  --status-critical: #e66767;
+  --status-info: #3987e5;
+  --status-info-dim: rgba(57, 135, 229, 0.14);
+
+  /* the synthetic-data marker, deliberately unlike any series colour */
+  --synthetic: #9085e9;
+  --synthetic-dim: rgba(144, 133, 233, 0.15);
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
+
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+h1 { font-size: 26px; }
+h2 { font-size: 18px; }
+h3 { font-size: 15px; }
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- layout */
+
+.app { display: flex; flex-direction: column; min-height: 100%; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 20px; height: 56px;
+  background: rgba(14, 15, 18, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: baseline; gap: 9px; font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--series-1); box-shadow: 0 0 12px var(--series-1); }
+.brand-sub { font-size: 11px; font-weight: 500; color: var(--text-muted); letter-spacing: 0.02em; }
+
+.nav { display: flex; gap: 2px; margin-left: 8px; }
+.nav a {
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-size: 13px; font-weight: 500;
+  transition: background 120ms, color 120ms;
+}
+.nav a:hover { background: var(--surface-2); color: var(--text-primary); }
+.nav a.active { background: var(--surface-3); color: var(--text-primary); }
+
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+.content { flex: 1; padding: 22px 20px 60px; max-width: 1560px; width: 100%; margin: 0 auto; }
+
+.page-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.page-head p { margin: 4px 0 0; color: var(--text-secondary); max-width: 78ch; font-size: 13px; }
+
+/* -------------------------------------------------------------- synthetic */
+
+/* Non-dismissible. The one failure that would make this project
+ * indefensible is a fabricated dollar figure read as a market price. */
+.synthetic-ribbon {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 20px;
+  background: var(--synthetic-dim);
+  border-bottom: 1px solid rgba(144, 133, 233, 0.35);
+  font-size: 12px; color: #d6d1ff;
+}
+.synthetic-ribbon strong { color: #fff; font-weight: 600; }
+
+.chip-synthetic {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px; border-radius: 5px;
+  background: var(--synthetic-dim); border: 1px solid rgba(144, 133, 233, 0.4);
+  color: #cec8ff; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- surfaces */
+
+.card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.card-pad { padding: 16px; }
+
+.card-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 16px; border-bottom: 1px solid var(--border);
+}
+.card-head h2, .card-head h3 { flex: 1; }
+
+.muted { color: var(--text-muted); }
+.secondary { color: var(--text-secondary); }
+.small { font-size: 12px; }
+.tiny { font-size: 11px; }
+
+/* ----------------------------------------------------------------- chips */
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 5px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 11px; color: var(--text-secondary); white-space: nowrap;
+}
+.chip-buy { background: var(--status-good-dim); border-color: rgba(25,158,112,.45); color: #7ee0b8; font-weight: 600; }
+.chip-wait { background: var(--status-warn-dim); border-color: rgba(201,133,0,.45); color: #f0c465; font-weight: 600; }
+.chip-none { background: var(--surface-2); border-color: var(--border); color: var(--text-muted); }
+
+/* --------------------------------------------------------------- controls */
+
+button, .btn {
+  font-family: inherit; font-size: 13px;
+  padding: 7px 13px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text-primary); cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+button:hover, .btn:hover { background: var(--surface-3); border-color: var(--border-strong); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--series-1); border-color: var(--series-1);
+  color: #fff; font-weight: 600;
+}
+.btn-primary:hover { background: #4d94ea; border-color: #4d94ea; }
+
+.btn-buy { background: var(--status-good); border-color: var(--status-good); color: #05231a; font-weight: 700; }
+.btn-buy:hover { background: #1fb883; border-color: #1fb883; }
+
+input, select {
+  font-family: inherit; font-size: 13px;
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-1); border: 1px solid var(--border);
+  color: var(--text-primary); width: 100%;
+}
+input:focus, select:focus { outline: none; border-color: var(--series-1); }
+label.field { display: block; margin-bottom: 11px; }
+label.field > span { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* --------------------------------------------------------------- tables */
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; padding: 9px 12px;
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+td { padding: 10px 12px; border-bottom: 1px solid rgba(51,53,61,.55); }
+tbody tr:hover { background: var(--surface-2); }
+.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* wide content scrolls inside its own container, never the page body */
+.table-scroll { overflow-x: auto; }
+
+/* ----------------------------------------------------------------- grids */
+
+.grid-cards {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+}
+
+.layout-rail { display: grid; grid-template-columns: 248px 1fr; gap: 18px; align-items: start; }
+@media (max-width: 940px) { .layout-rail { grid-template-columns: 1fr; } }
+
+.stat-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+.stat {
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 13px 15px;
+}
+.stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.stat-value { font-size: 23px; font-weight: 650; margin-top: 3px; font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.stat-note { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* ------------------------------------------------------------ event card */
+
+.event-card {
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 13px 14px;
+  display: flex; flex-direction: column; gap: 9px;
+  transition: border-color 130ms, transform 130ms;
+}
+.event-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.event-title { font-weight: 600; font-size: 14px; line-height: 1.3; }
+.event-meta { font-size: 11.5px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.event-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: auto; }
+
+/* ------------------------------------------------------------- utilities */
+
+.row { display: flex; align-items: center; gap: 8px; }
+.row-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.spacer { flex: 1; }
+.divider { height: 1px; background: var(--border); margin: 12px 0; }
+
+.empty {
+  padding: 44px 20px; text-align: center; color: var(--text-muted);
+  border: 1px dashed var(--border); border-radius: var(--radius);
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%; animation: shimmer 1.3s infinite; border-radius: var(--radius-sm);
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.scroll-y { overflow-y: auto; }

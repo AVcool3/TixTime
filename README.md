@@ -7,11 +7,35 @@ tickets, built on the structure of
 event catalogue, a calibrated price model, a walk-forward backtest, alerting,
 and a UI whose centrepiece is a past-and-future price chart.
 
+## Running it
+
+Needs **Python 3.11+** and **Node 18+**. Nothing else — no database server, no
+Docker, no API keys.
+
+```bash
+git clone -b claude/ticket-price-prediction-9ib9dh https://github.com/AVcool3/TixTime
+cd TixTime
+
+make quick          # ~4 min: venv, deps, ingest, simulate, train, precompute
+
+make api            # terminal 1  ->  http://localhost:8000
+make web            # terminal 2  ->  http://localhost:5173   <- open this
 ```
-make demo      # build everything from the raw CSV
-make api       # http://localhost:8000
-make web       # http://localhost:5173
+
+`make quick` is the shortest path to a working app. The Accuracy page will say
+it has no results until you also run:
+
+```bash
+make analysis       # ~4 min: the backtest and the regime holdout
 ```
+
+`make demo` runs both. Everything is derived from
+`data/raw/seatgeek_events.csv`, which is committed, and the simulator is seeded
+per event — so a clean clone rebuilds byte-identical output. `make clean` drops
+every generated artefact without touching the raw CSV.
+
+There is no build step to skip: the DuckDB warehouse, the model and the reports
+are all gitignored, because they are reproducible and large.
 
 ---
 

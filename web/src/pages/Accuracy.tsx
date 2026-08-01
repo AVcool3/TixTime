@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, XAxis, YAxis,
 } from 'recharts';
-import { Accuracy as AccuracyPayload, api } from '../lib/api';
+import { Accuracy as AccuracyPayload, Interval, api } from '../lib/api';
 import { useClock } from '../lib/clock';
 import { Empty, Loading, Price, Stat, formatPct } from '../components/Primitives';
 
@@ -222,6 +222,8 @@ export function Accuracy() {
         </div>
       </div>
 
+      <GapIntervals backtest={backtest} />
+
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-head">
           <h2>By how far out you start looking</h2>
@@ -311,5 +313,105 @@ export function Accuracy() {
         </div>
       ) : null}
     </>
+  );
+}
+
+
+const RIVALS = [
+  { key: 'ALWAYS_WAIT', label: 'vs never buying until event day' },
+  { key: 'BUY_NOW', label: 'vs buying immediately' },
+  { key: 'FIXED_30', label: 'vs waiting until 30 days out' },
+];
+
+/**
+ * Confidence intervals on the GAPS, resampled by event.
+ *
+ * The raw decision count is not a sample size: the same event contributes one
+ * decision per seat tier and again per start window, and the start windows are
+ * nested spans of one price path. Resampling whole events is the only unit
+ * close to independent, and the gap interval is what settles whether an edge
+ * is real -- the levels move together across resamples.
+ */
+function GapIntervals({ backtest }: { backtest: NonNullable<AccuracyPayload['backtest']> }) {
+  const unc = backtest.uncertainty;
+  if (!unc) return null;
+  const get = (k: string): Interval | null => {
+    const v = unc[k];
+    return v && typeof v !== 'string' ? v : null;
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card-head">
+        <h2>Is the edge real, or sampling noise?</h2>
+        <span className="tiny muted">95% cluster bootstrap, resampled by event</span>
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Comparison</th>
+              <th className="num">Mean paid, difference</th>
+              <th>Verdict</th>
+              <th className="num">Hit rate, difference</th>
+              <th>Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {RIVALS.map(({ key, label }) => {
+              const paid = get(`MODEL_minus_${key}.mean_paid`);
+              const hit = get(`MODEL_minus_${key}.hit_rate_within_5pct`);
+              if (!paid && !hit) return null;
+              return (
+                <tr key={key}>
+                  <td>{label}</td>
+                  <td className="num">
+                    {paid ? (
+                      <>
+                        <span style={{ color: paid.point < 0 ? 'var(--status-good)' : 'var(--text-primary)' }}>
+                          {paid.point > 0 ? '+' : ''}${paid.point.toFixed(2)}
+                        </span>
+                        <div className="tiny muted">
+                          [{paid.ci_low.toFixed(2)}, {paid.ci_high.toFixed(2)}]
+                        </div>
+                      </>
+                    ) : '—'}
+                  </td>
+                  <td><Verdict interval={paid} /></td>
+                  <td className="num">
+                    {hit ? (
+                      <>
+                        {hit.point > 0 ? '+' : ''}{(hit.point * 100).toFixed(1)} pp
+                        <div className="tiny muted">
+                          [{(hit.ci_low * 100).toFixed(1)}, {(hit.ci_high * 100).toFixed(1)}]
+                        </div>
+                      </>
+                    ) : '—'}
+                  </td>
+                  <td><Verdict interval={hit} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="card-pad tiny muted">
+        A negative mean-paid difference means the model is cheaper. Read the two columns against
+        each other rather than separately: the hit-rate edge over never-buying-until-event-day is
+        a couple of percentage points — detectable at this sample size, but negligible next to a
+        mean-paid gap of well over ten dollars on the same decisions. Statistical significance and
+        practical significance are not the same thing, and this row is the clearest example of the
+        difference on this page.
+      </div>
+    </div>
+  );
+}
+
+function Verdict({ interval }: { interval: Interval | null }) {
+  if (!interval) return <span className="muted">—</span>;
+  return interval.excludes_zero ? (
+    <span className="chip chip-buy">significant</span>
+  ) : (
+    <span className="chip chip-none">not significant</span>
   );
 }

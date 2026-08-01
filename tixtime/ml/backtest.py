@@ -130,6 +130,69 @@ def _simulate(
     return result
 
 
+def _bootstrap(frame: pd.DataFrame, summarise, reps: int = 400, seed: int = 5) -> dict:
+    """Cluster bootstrap by event_id.
+
+    The decision count flatters itself badly. 53,696 "decisions" are ~3,000
+    events counted once per seat tier and then again per start window, and the
+    start windows are nested spans of the SAME price path -- a 14-day decision
+    is a suffix of the 90-day one. Treating those as independent would produce
+    absurdly tight intervals.
+
+    Resampling whole EVENTS with replacement keeps every correlated decision
+    for an event together, which is the only unit that is close to independent.
+    The interval on the MODEL-minus-baseline GAP is the number that matters:
+    the levels move together across resamples, so a gap can be solid even when
+    both levels look wobbly.
+    """
+    rng = np.random.default_rng(seed)
+    events = frame["event_id"].unique()
+    # Row positions per event, so a resample is an index concat rather than a
+    # concat of thousands of DataFrames -- the latter dominates runtime at
+    # 3,000 events x 400 reps.
+    positions = [group.to_numpy() for _, group in
+                 pd.Series(np.arange(len(frame)), index=frame["event_id"].to_numpy()).groupby(level=0)]
+    event_count = len(positions)
+
+    samples: dict[str, list[float]] = {}
+    for _ in range(reps):
+        drawn = rng.integers(0, event_count, size=event_count)
+        block = frame.iloc[np.concatenate([positions[i] for i in drawn])]
+        stats = summarise(block)
+        for name, values in stats.items():
+            samples.setdefault(f"{name}.savings_captured_pct", []).append(values["savings_captured_pct"])
+            samples.setdefault(f"{name}.mean_paid", []).append(values["mean_paid"])
+            samples.setdefault(f"{name}.hit_rate_within_5pct", []).append(values["hit_rate_within_5pct"])
+        # Gaps against the two baselines that matter, per resample.
+        if "MODEL" in stats:
+            for rival in ("ALWAYS_WAIT", "BUY_NOW", "FIXED_30"):
+                if rival in stats:
+                    samples.setdefault(f"MODEL_minus_{rival}.mean_paid", []).append(
+                        stats["MODEL"]["mean_paid"] - stats[rival]["mean_paid"]
+                    )
+                    samples.setdefault(f"MODEL_minus_{rival}.hit_rate_within_5pct", []).append(
+                        stats["MODEL"]["hit_rate_within_5pct"] - stats[rival]["hit_rate_within_5pct"]
+                    )
+
+    out = {}
+    for key, values in samples.items():
+        array = np.asarray(values, dtype=float)
+        low, high = np.percentile(array, [2.5, 97.5])
+        out[key] = {
+            "point": round(float(array.mean()), 4),
+            "ci_low": round(float(low), 4),
+            "ci_high": round(float(high), 4),
+            # For a gap, "excludes zero" is the whole question.
+            "excludes_zero": bool(low > 0 or high < 0),
+        }
+    out["_method"] = (
+        f"{reps} cluster-bootstrap resamples over {len(events)} events; every decision for a "
+        "resampled event travels with it, because tiers and nested start windows of one event "
+        "are not independent observations."
+    )
+    return out
+
+
 def run(
     warehouse_path: Path = WAREHOUSE,
     cutoff: date | None = None,
@@ -237,6 +300,7 @@ def run(
         return out
 
     report["overall"] = summarise(frame)
+    report["uncertainty"] = _bootstrap(frame, summarise)
     for start in START_WINDOWS:
         block = frame[frame["start_days"] == start]
         if not block.empty:
@@ -272,7 +336,22 @@ def run(
             )
         print(f"\n{report['model_fall_through_rate']:.0%} of MODEL decisions never produced a "
               f"BUY signal and fell through to event day.")
-        print("hit@5% is NOT the metric to judge on -- compare MODEL to ALWAYS_WAIT there.")
+        print("hit@5% is NOT the metric to judge on -- compare MODEL to ALWAYS_WAIT there.\n")
+
+        unc = report.get("uncertainty", {})
+        print("cluster-bootstrap 95% intervals on the gaps (negative mean paid = model is cheaper):")
+        for rival in ("ALWAYS_WAIT", "BUY_NOW", "FIXED_30"):
+            paid = unc.get(f"MODEL_minus_{rival}.mean_paid")
+            hit = unc.get(f"MODEL_minus_{rival}.hit_rate_within_5pct")
+            if not paid:
+                continue
+            verdict = "significant" if paid["excludes_zero"] else "NOT significant"
+            print(f"  vs {rival:<12} mean paid  {paid['point']:+7.2f}  "
+                  f"[{paid['ci_low']:+.2f}, {paid['ci_high']:+.2f}]  {verdict}")
+            if hit:
+                hv = "significant" if hit["excludes_zero"] else "NOT significant"
+                print(f"  {'':<15} hit@5%    {hit['point']:+7.3f}  "
+                      f"[{hit['ci_low']:+.3f}, {hit['ci_high']:+.3f}]  {hv}")
         print(f"\nwrote {REPORT_DIR / 'backtest.json'}")
     return report
 

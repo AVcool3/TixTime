@@ -70,6 +70,22 @@ And the FIXED_30 row is scored on 40,272 decisions rather than 53,696, because a
 "buy at 30 days out" rule is undefined for a decision starting 14 days out, so
 that comparison is not quite like-for-like.
 
+Confidence intervals are cluster-bootstrapped by event, because the 53,696
+"decisions" are not 53,696 independent observations — each event contributes one
+per seat tier and again per start window, and the start windows are nested spans
+of the same price path. Resampling whole events, on the differences that matter:
+
+| Comparison | Mean paid | Hit rate |
+|---|---|---|
+| vs never buying until event day | **−$15.60** [−18.38, −12.81] | +1.6pp [+0.2, +2.8] |
+| vs buying immediately | **−$6.48** [−7.05, −5.95] | +41.1pp [+39.2, +43.1] |
+| vs waiting until 30 days out | **−$1.27** [−1.77, −0.79] | +31.2pp [+29.1, +33.3] |
+
+Every mean-paid gap excludes zero. The hit-rate gap against never-waiting is
+statistically detectable at this sample size and practically negligible — a
+couple of percentage points against a mean-paid gap of more than fifteen
+dollars on the same decisions. At 600 events it is not detectable at all.
+
 **Legitimate reading:** the pipeline recovers timing structure it was not shown.
 The model trains only on events that finished before the clock date and is
 scored on later ones; it is scored as a *policy* (ask daily, buy on the first

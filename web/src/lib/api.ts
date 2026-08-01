@@ -144,6 +144,10 @@ export interface Timeline extends Provenance {
   unforecastable_reason?: string;
 }
 
+export interface Interval {
+  point: number; ci_low: number; ci_high: number; excludes_zero: boolean;
+}
+
 export interface StrategyStats {
   mean_paid: number; mean_regret: number; mean_regret_pct: number;
   savings_captured_pct: number; hit_rate_within_5pct: number; n: number;
@@ -158,6 +162,7 @@ export interface Accuracy extends Provenance {
     model_days_waited_median: number;
     model_fall_through_rate?: number;
     honest_reading?: string;
+    uncertainty?: Record<string, Interval | string>;
   } | null;
   training: {
     model_version: string; trained_through: string; n_train_events: number;

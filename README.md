@@ -96,6 +96,46 @@ every baseline including the zero-skill one.
 trained on a simulator learns the simulator. The only way to know whether this
 predicts real prices is to connect a live collector and measure it.
 
+### The regime holdout — and it does not transfer
+
+"A model trained on a simulator learns the simulator" is easy to write as a
+caveat and easy to ignore. So this project tests it directly, and publishes the
+answer even though the answer is unflattering.
+
+`make regime-test` points the **same, un-retrained** model at markets built from
+different structural rules — different curve shape, different terminal timing,
+~3x the noise, and in one case a deliberately *reversed* relationship between
+demand and when prices bottom. Over 800 held-out events:
+
+| Market regime | Model pays | vs buying now | vs never waiting | Verdict |
+|---|---|---|---|---|
+| `synthetic_v1` (trained on) | $135.56 | −$6.24 | −$14.76 | **survives** |
+| `synthetic_v2_sharp` | $155.75 | **+$9.35** | −$66.06 | **fails** |
+| `synthetic_v3_inverted` | $135.35 | −$7.45 | **+$8.64** | **degrades** |
+
+**The model does not fully transfer**, and where it breaks is the useful part.
+
+On `v2_sharp` — a steeper, noisier market — it is *worse than simply buying when
+you first look*. It learned "wait" too eagerly for a market that falls faster
+and rebounds harder. That is the real failure.
+
+On `v3_inverted` it does better than expected: with the demand-to-timing
+relationship reversed outright, it still beats buying immediately by $7.45,
+though it loses to never-waiting. So the model is not merely reciting the
+demand→timing mapping it was taught; its weakness is curve **shape and noise
+level**, not the demand relationship. That is a more specific and more useful
+diagnosis than "it memorised the simulator", and it is only visible because the
+test exists.
+
+What this means for everything above: the 49% savings-captured headline is a
+*within-regime* result. It is real evidence that the pipeline works end to end —
+feature engineering, leakage control, the policy, the serving path, all verified
+against events the model never saw — and it is not evidence that the model has
+learned something general about ticket markets.
+
+This is the test that would tell you whether to trust a live deployment. Run it
+against real collected prices once a feed is connected.
+
 ---
 
 ## Connecting real prices

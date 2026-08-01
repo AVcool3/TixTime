@@ -688,14 +688,21 @@ def teams(con=Depends(get_connection), as_of: date = Depends(resolve_as_of),
 def accuracy(as_of: date = Depends(resolve_as_of)):
     """Backtest and training metrics, with the caveat attached to the numbers."""
     payload: dict[str, Any] = {**_provenance(as_of)}
-    for name, filename in (("backtest", "backtest.json"), ("training", "training_metrics.json")):
+    for name, filename in (
+        ("backtest", "backtest.json"),
+        ("training", "training_metrics.json"),
+        ("regime_holdout", "regime_holdout.json"),
+    ):
         path = REPORT_DIR / filename
         payload[name] = json.loads(path.read_text()) if path.exists() else None
     payload["interpretation"] = (
         "These figures are measured on simulated prices. They demonstrate that the "
         "pipeline recovers timing structure it was not trained on -- the backtest scores "
         "events the model never saw -- but they are NOT evidence that the model would "
-        "predict real ticket prices well. Connect a live price collector to measure that."
+        "predict real ticket prices well. The regime holdout below is the sharper test, "
+        "and it does not flatter the model: pointed at markets built from different "
+        "structural rules, the same policy loses to simply buying immediately. Read the "
+        "headline backtest as a within-regime result."
     )
     return payload
 

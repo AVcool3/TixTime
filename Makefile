@@ -7,9 +7,9 @@
 PY := ./.venv/bin/python
 PIP := ./.venv/bin/pip
 
-.PHONY: demo setup ingest simulate train precompute backtest api web test clean
+.PHONY: demo setup ingest simulate train precompute backtest regime-test api web test clean
 
-demo: setup ingest simulate train precompute backtest
+demo: setup ingest simulate train precompute backtest regime-test
 	@echo ""
 	@echo "Build complete. Start the two servers in separate terminals:"
 	@echo "    make api"
@@ -34,6 +34,9 @@ precompute:        ## build the deal board and sparkline cache
 
 backtest:          ## score the policy against baselines on unseen events
 	$(PY) -m tixtime.ml.backtest
+
+regime-test:       ## does the model generalise, or did it memorise the simulator?
+	$(PY) -m tixtime.ml.regime_test
 
 api:
 	./.venv/bin/uvicorn tixtime.api.main:app --reload --port 8000

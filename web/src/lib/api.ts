@@ -153,6 +153,25 @@ export interface StrategyStats {
   savings_captured_pct: number; hit_rate_within_5pct: number; n: number;
 }
 
+export interface RegimeResult {
+  description: string;
+  verdict: 'survives' | 'degrades' | 'fails' | 'unknown';
+  n_decisions: number;
+  model_fall_through_rate: number;
+  strategies: Record<string, StrategyStats>;
+  model_vs_buy_now: number;
+  model_vs_always_wait: number;
+}
+
+export interface RegimeHoldout {
+  model_version: string;
+  trained_on: string;
+  n_events: number;
+  question: string;
+  regimes: Record<string, RegimeResult>;
+  summary: string;
+}
+
 export interface Accuracy extends Provenance {
   backtest: {
     model_version: string; trained_through: string; data_source: string;
@@ -170,6 +189,7 @@ export interface Accuracy extends Provenance {
     heads: Record<string, Record<string, number>>;
     train_seconds: number;
   } | null;
+  regime_holdout: RegimeHoldout | null;
   interpretation: string;
 }
 

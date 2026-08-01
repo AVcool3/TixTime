@@ -57,6 +57,7 @@ from tixtime.catalog.reference import (
     tiers_for_event,
 )
 from tixtime.config import SIMULATION, SYNTHETIC_SOURCE, WARMUP_DAYS
+from tixtime.pricing.regimes import DEFAULT_REGIME, Regime
 
 
 def _event_rng(event_id: int, seed: int) -> np.random.Generator:
@@ -137,7 +138,9 @@ class PathParams:
     tau_terminal: float
 
 
-def _path_params(demand: float, rng: np.random.Generator, horizon: int) -> PathParams:
+def _path_params(
+    demand: float, rng: np.random.Generator, horizon: int, regime: Regime = DEFAULT_REGIME
+) -> PathParams:
     # Hot events keep a thin early premium and then run up; soft events carry a
     # fat early premium (optimistic sellers) and then capitulate.
     # Total fall from listing open to the trough, in log points. 0.29 log is a
@@ -146,20 +149,25 @@ def _path_params(demand: float, rng: np.random.Generator, horizon: int) -> PathP
     # A soft event gives up this premium AND then dumps, so the two terms
     # compound; sizing this term as if it were the whole fall produced 60%+
     # open-to-event declines.
-    open_premium = float(np.clip(0.30 - 0.12 * demand + rng.normal(0, 0.04), 0.08, 0.50))
+    open_premium = float(np.clip(
+        regime.open_premium_base + regime.open_premium_demand * demand + rng.normal(0, 0.04),
+        0.06, 0.60))
     # Curvature of the decline. Must stay BELOW 1: with an exponent above 1 the
     # curve approaches the trough with near-zero slope, recreating the flat
     # plateau this shape was meant to remove -- on a 240-day horizon the curve
     # rose only ~0.008 log points between d=40 and d=60, so noise chose the
     # argmin and the median optimal day drifted out past 85. Below 1 the
     # approach is steep and the trough is sharply defined.
-    decline_shape = float(np.clip(rng.normal(0.95, 0.16), 0.65, 1.35))
+    decline_shape = float(np.clip(
+        rng.normal(regime.decline_shape_mean, regime.decline_shape_sd), 0.45, 2.2))
 
     # Where the decline bottoms out. Hot events bottom late in the window and
     # then run up; soft events bottom early here, but their terminal dump
     # usually drags the true minimum to event day anyway. The wide spread is
     # what populates the 1-3 week bucket.
-    trough_center = float(np.clip(12 + 38 * demand + rng.normal(0, 12), 3, 0.6 * horizon))
+    trough_center = float(np.clip(
+        regime.trough_base + regime.trough_demand * demand + rng.normal(0, regime.trough_sd),
+        2, 0.7 * horizon))
 
     # The terminal branch is what makes buy-timing non-trivial, so it has to be
     # decisive: hot events run up hard into the event, soft events capitulate.
@@ -170,14 +178,14 @@ def _path_params(demand: float, rng: np.random.Generator, horizon: int) -> PathP
     # late run-up is a real but MINORITY regime -- it needs genuinely high
     # demand and supply exhaustion. Centring on 0.50 made half the catalogue
     # run up, which inverts the documented default.
-    terminal_gain = float((demand - 0.58) * 1.45 + rng.normal(0, 0.08))
+    terminal_gain = float((demand - regime.terminal_centre) * regime.terminal_scale + rng.normal(0, 0.08))
     # How early the terminal move starts. A large tau here means the run-up is
     # already underway two months out, which pulled hot events' optimal buy day
     # back to ~88 days; the run-up should bite in the final few weeks.
     tau_terminal = (
-        float(np.clip(rng.uniform(7, 13), 5, 18))
+        float(rng.uniform(regime.tau_hot_low, regime.tau_hot_high))
         if terminal_gain >= 0
-        else float(np.clip(rng.uniform(3.5, 10.0), 2.5, 13))
+        else float(rng.uniform(regime.tau_soft_low, regime.tau_soft_high))
     )
 
     return PathParams(
@@ -240,7 +248,9 @@ def _ar1_noise(n: int, rng: np.random.Generator, sigma: float = 0.008, phi: floa
     return out
 
 
-def _shocks(days: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+def _shocks(
+    days: np.ndarray, rng: np.random.Generator, rate: float = 0.4, magnitude_sd: float = 0.03
+) -> np.ndarray:
     """Occasional persistent level shifts: an injury, a hot streak, weather.
 
     Kept small relative to the deterministic shape. Oversized shocks bias the
@@ -248,22 +258,24 @@ def _shocks(days: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     every day after it and leaves the pre-shock days looking cheapest.
     """
     out = np.zeros(len(days))
-    for _ in range(rng.poisson(0.4)):
+    for _ in range(rng.poisson(rate)):
         at = rng.integers(0, len(days))
-        magnitude = rng.normal(0.0, 0.03)
+        magnitude = rng.normal(0.0, magnitude_sd)
         # A shock shifts the level from that day onward rather than for one day.
         out[at:] += magnitude
     return out
 
 
-def simulate_event(event: pd.Series, seed: int = SIMULATION.seed) -> pd.DataFrame:
+def simulate_event(
+    event: pd.Series, seed: int = SIMULATION.seed, regime: Regime = DEFAULT_REGIME
+) -> pd.DataFrame:
     """Generate the full price history for one event, across every seat tier."""
     horizon = int(event["horizon_days"])
     rng = _event_rng(int(event["event_id"]), seed)
 
     demand = _demand_score(event, rng)
     base = _base_price(event, demand)
-    params = _path_params(demand, rng, horizon)
+    params = _path_params(demand, rng, horizon, regime)
 
     # Simulate a burn-in period BEFORE the exposed window so that 7/14/30-day
     # rolling features are fully defined on the very first exposed day. Without
@@ -282,14 +294,15 @@ def simulate_event(event: pd.Series, seed: int = SIMULATION.seed) -> pd.DataFram
 
     # Shared across tiers: the whole event moves together, so a shock hits
     # every section at once. Tier-specific noise is added on top.
-    common_noise = _ar1_noise(len(days), rng) + _shocks(days, rng)
+    common_noise = (_ar1_noise(len(days), rng, regime.ar1_sigma, regime.ar1_phi)
+                    + _shocks(days, rng, regime.shock_rate, regime.shock_sd))
 
     frames = []
     for tier in tiers:
         # The shape is defined on the exposed window; burn-in days sit at or
         # before listing open, so they clamp to the opening level.
         shape = _log_shape(np.minimum(days, horizon), horizon, params, tier)
-        tier_noise = _ar1_noise(len(days), rng, sigma=0.005)
+        tier_noise = _ar1_noise(len(days), rng, sigma=regime.tier_sigma, phi=regime.ar1_phi)
         log_price = np.log(base * tier.price_multiplier) + shape + common_noise + tier_noise
         median_price = np.exp(log_price)
 
@@ -305,7 +318,8 @@ def simulate_event(event: pd.Series, seed: int = SIMULATION.seed) -> pd.DataFram
         # it.
         inventory = _inventory(np.minimum(days, horizon), horizon, demand, tier, rng)
         depth = inventory / max(inventory.max(), 1.0)
-        get_in = median_price * (1.0 - (0.11 + 0.06 * depth))
+        get_in = median_price * (
+            1.0 - (regime.get_in_base_discount + regime.get_in_depth_discount * depth))
 
         frames.append(
             pd.DataFrame(
@@ -319,7 +333,7 @@ def simulate_event(event: pd.Series, seed: int = SIMULATION.seed) -> pd.DataFram
                     "listing_count": inventory.astype(int),
                     "ticket_count": (inventory * rng.uniform(1.6, 2.4)).astype(int),
                     "is_burn_in": is_burn_in,
-                    "source": SYNTHETIC_SOURCE,
+                    "source": regime.key,
                 }
             )
         )

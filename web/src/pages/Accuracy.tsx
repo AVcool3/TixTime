@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, XAxis, YAxis,
 } from 'recharts';
-import { Accuracy as AccuracyPayload, Interval, api } from '../lib/api';
+import { Accuracy as AccuracyPayload, Interval, RegimeHoldout, api } from '../lib/api';
 import { useClock } from '../lib/clock';
 import { Empty, Loading, Price, Stat, formatPct } from '../components/Primitives';
 
@@ -224,6 +224,8 @@ export function Accuracy() {
 
       <GapIntervals backtest={backtest} />
 
+      <RegimePanel holdout={data.regime_holdout} />
+
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-head">
           <h2>By how far out you start looking</h2>
@@ -413,5 +415,123 @@ function Verdict({ interval }: { interval: Interval | null }) {
     <span className="chip chip-buy">significant</span>
   ) : (
     <span className="chip chip-none">not significant</span>
+  );
+}
+
+
+const VERDICT_STYLE: Record<string, { label: string; className: string; note: string }> = {
+  survives: {
+    label: 'survives',
+    className: 'chip chip-buy',
+    note: 'still cheaper than both buying immediately and never waiting',
+  },
+  degrades: {
+    label: 'degrades',
+    className: 'chip chip-wait',
+    note: 'still beats buying immediately, but loses to never waiting',
+  },
+  fails: {
+    label: 'fails',
+    className: 'chip',
+    note: 'loses to simply buying immediately',
+  },
+};
+
+/**
+ * The regime holdout — the least flattering and most important panel here.
+ *
+ * Every other number on this page is measured on the market the model trained
+ * on, which cannot distinguish "learned to time a market" from "inverted its
+ * own generator". This points the same, un-retrained model at markets built
+ * from different structural rules and reports what happens, including when the
+ * answer is bad.
+ */
+function RegimePanel({ holdout }: { holdout: RegimeHoldout | null }) {
+  if (!holdout) return null;
+  const entries = Object.entries(holdout.regimes);
+  const failed = entries.filter(([, r]) => r.verdict === 'fails');
+
+  return (
+    <div className="card" style={{ marginBottom: 16, borderColor: failed.length ? 'rgba(230,103,103,.45)' : undefined }}>
+      <div className="card-head">
+        <h2>Does it generalise, or did it memorise the simulator?</h2>
+        <span className="tiny muted">{holdout.n_events.toLocaleString()} held-out events · model not retrained</span>
+      </div>
+
+      <div className="card-pad" style={{ paddingBottom: 4 }}>
+        <p className="small secondary" style={{ marginTop: 0, maxWidth: '84ch' }}>
+          {holdout.question} The same <span className="mono">{holdout.model_version}</span> artefact,
+          trained only on <span className="mono">{holdout.trained_on}</span>, is pointed at markets
+          with different curve shapes, different terminal timing, several times the noise, and — in
+          the last one — a deliberately <em>reversed</em> relationship between demand and when
+          prices bottom.
+        </p>
+      </div>
+
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Market regime</th>
+              <th className="num">Model pays</th>
+              <th className="num">vs buying now</th>
+              <th className="num">vs never waiting</th>
+              <th>Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([key, regime]) => {
+              const style = VERDICT_STYLE[regime.verdict] ?? VERDICT_STYLE.fails;
+              const good = regime.model_vs_buy_now < 0;
+              return (
+                <tr key={key}>
+                  <td>
+                    <span className="mono" style={{ fontSize: 12 }}>{key}</span>
+                    <div className="tiny muted" style={{ maxWidth: '46ch' }}>{regime.description}</div>
+                  </td>
+                  <td className="num">
+                    <Price value={regime.strategies.MODEL?.mean_paid} source="synthetic_v1" />
+                  </td>
+                  <td className="num" style={{ color: good ? 'var(--status-good)' : 'var(--status-critical)' }}>
+                    {regime.model_vs_buy_now > 0 ? '+' : ''}${regime.model_vs_buy_now.toFixed(2)}
+                  </td>
+                  <td className="num" style={{ color: regime.model_vs_always_wait < 0 ? 'var(--status-good)' : 'var(--status-critical)' }}>
+                    {regime.model_vs_always_wait > 0 ? '+' : ''}${regime.model_vs_always_wait.toFixed(2)}
+                  </td>
+                  <td>
+                    <span
+                      className={style.className}
+                      style={regime.verdict === 'fails'
+                        ? { background: 'rgba(230,103,103,.15)', borderColor: 'rgba(230,103,103,.45)', color: '#f0a0a0', fontWeight: 600 }
+                        : undefined}
+                    >
+                      {style.label}
+                    </span>
+                    <div className="tiny muted" style={{ maxWidth: '30ch' }}>{style.note}</div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card-pad small" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        <strong style={{ color: '#fff' }}>What this means. </strong>
+        {failed.length > 0 ? (
+          <>
+            The model does <strong>not</strong> transfer. Change the market’s structural rules and
+            the policy loses to simply buying when you first look. Read the headline backtest above
+            as a <em>within-regime</em> result: it shows the pipeline works end to end — features,
+            leakage control, policy, serving — not that the model has learned something general
+            about ticket markets. That distinction is the whole reason this panel exists, and
+            publishing it is more useful than omitting it.
+          </>
+        ) : (
+          <>The policy holds up across every regime tested, which is evidence it is reading
+          trajectory and inventory rather than reciting memorised parameters.</>
+        )}
+      </div>
+    </div>
   );
 }

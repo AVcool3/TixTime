@@ -172,3 +172,50 @@ class TestCalibration:
             best = frame.loc[frame.groupby("tier_key")["get_in_price"].idxmin()]
             spreads.append(best["days_until_event"].max() - best["days_until_event"].min())
         assert np.median(spreads) >= 3, np.median(spreads)
+
+
+class TestRegimes:
+    """The regime holdout is only meaningful if the alternative regimes are
+    genuinely structurally different and the trained-on one is untouched."""
+
+    def test_v1_regime_reproduces_the_default_market(self, events):
+        from tixtime.pricing.regimes import V1
+
+        event = events.iloc[0]
+        pd.testing.assert_frame_equal(simulate_event(event), simulate_event(event, regime=V1))
+
+    def test_alternative_regimes_produce_different_markets(self, events):
+        from tixtime.pricing.regimes import V2_SHARP, V3_INVERTED
+
+        event = events.iloc[0]
+        base = simulate_event(event)["get_in_price"].to_numpy()
+        for regime in (V2_SHARP, V3_INVERTED):
+            other = simulate_event(event, regime=regime)["get_in_price"].to_numpy()
+            assert not np.allclose(base, other), regime.key
+
+    def test_regime_rows_carry_their_own_source_tag(self, events):
+        from tixtime.pricing.regimes import V2_SHARP
+
+        frame = simulate_event(events.iloc[0], regime=V2_SHARP)
+        assert set(frame["source"].unique()) == {"synthetic_v2_sharp"}
+
+    def test_inverted_regime_reverses_the_demand_to_timing_relationship(self, events):
+        """The adversarial regime must actually be adversarial: if its
+        correlation had the same sign as v1, the holdout would prove nothing."""
+        from tixtime.pricing.regimes import V1, V3_INVERTED
+
+        correlations = {}
+        for regime in (V1, V3_INVERTED):
+            demands, optimal = [], []
+            for _, event in events.head(150).iterrows():
+                frame = simulate_event(event, regime=regime)
+                frame = frame[~frame["is_burn_in"]]
+                tier = frame["tier_key"].iloc[-1]
+                series = frame[frame["tier_key"] == tier]
+                prices = series["get_in_price"].to_numpy()
+                optimal.append(series["days_until_event"].to_numpy()[prices.argmin()])
+                demands.append(_demand_score(event, _event_rng(int(event["event_id"]), SIMULATION.seed)))
+            correlations[regime.key] = float(np.corrcoef(demands, optimal)[0, 1])
+
+        assert correlations[V1.key] > 0.3, correlations
+        assert correlations[V3_INVERTED.key] < correlations[V1.key] - 0.4, correlations

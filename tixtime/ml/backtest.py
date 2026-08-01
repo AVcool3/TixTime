@@ -130,6 +130,51 @@ def _simulate(
     return result
 
 
+STRATEGY_COLUMNS = ["BUY_NOW", "ALWAYS_WAIT", "MODEL", "FIXED_7", "FIXED_14", "FIXED_30"]
+
+
+def summarise_strategies(block: pd.DataFrame, strategy_columns=None) -> dict:
+    """Score every strategy over a block of decisions.
+
+    Module-level so the regime holdout scores with exactly this function rather
+    than a lookalike copy that could drift away from it.
+    """
+    strategy_columns = strategy_columns or STRATEGY_COLUMNS
+    oracle = block["oracle"].to_numpy()
+    buy_now = block["BUY_NOW"].to_numpy()
+    # The most you could possibly have saved by timing it well.
+    achievable = buy_now - oracle
+    out = {}
+    for column in strategy_columns:
+        if column not in block:
+            continue
+        paid = block[column].to_numpy()
+        valid = ~np.isnan(paid)
+        if valid.sum() == 0:
+            continue
+        paid, oracle_v, achievable_v = paid[valid], oracle[valid], achievable[valid]
+        regret = paid - oracle_v
+        # Portfolio-level, NOT the mean of per-decision ratios. Averaging
+        # (achievable - regret)/achievable per row lets decisions where
+        # almost nothing was achievable (a couple of cents) divide by
+        # near-zero and dominate: the best strategy scored -149% while a
+        # worse one scored +19%.
+        total_achievable = float(achievable_v.sum())
+        captured = 1.0 - float(regret.sum()) / total_achievable if total_achievable > 0 else 0.0
+        out[column] = asdict_result(
+            StrategyResult(
+                name=column,
+                mean_paid=float(paid.mean()),
+                mean_regret=float(regret.mean()),
+                mean_regret_pct=float((regret / oracle_v).mean()),
+                savings_captured_pct=captured,
+                hit_rate_within_5pct=float((paid <= oracle_v * 1.05).mean()),
+                n=int(valid.sum()),
+            )
+        )
+    return out
+
+
 def _bootstrap(frame: pd.DataFrame, summarise, reps: int = 400, seed: int = 5) -> dict:
     """Cluster bootstrap by event_id.
 
@@ -260,44 +305,10 @@ def run(
         "overall": {},
     }
 
-    strategy_columns = ["BUY_NOW", "ALWAYS_WAIT", "MODEL", "FIXED_7", "FIXED_14", "FIXED_30"]
+    strategy_columns = STRATEGY_COLUMNS
 
     def summarise(block: pd.DataFrame) -> dict:
-        oracle = block["oracle"].to_numpy()
-        buy_now = block["BUY_NOW"].to_numpy()
-        # The most you could possibly have saved by timing it well.
-        achievable = buy_now - oracle
-        out = {}
-        for column in strategy_columns:
-            if column not in block:
-                continue
-            paid = block[column].to_numpy()
-            valid = ~np.isnan(paid)
-            if valid.sum() == 0:
-                continue
-            paid, oracle_v, achievable_v = paid[valid], oracle[valid], achievable[valid]
-            regret = paid - oracle_v
-            # Portfolio-level, NOT the mean of per-decision ratios. Averaging
-            # (achievable - regret)/achievable per row lets decisions where
-            # almost nothing was achievable (a couple of cents) divide by
-            # near-zero and dominate: the best strategy scored -149% while a
-            # worse one scored +19%.
-            total_achievable = float(achievable_v.sum())
-            captured = (
-                1.0 - float(regret.sum()) / total_achievable if total_achievable > 0 else 0.0
-            )
-            out[column] = asdict_result(
-                StrategyResult(
-                    name=column,
-                    mean_paid=float(paid.mean()),
-                    mean_regret=float(regret.mean()),
-                    mean_regret_pct=float((regret / oracle_v).mean()),
-                    savings_captured_pct=captured,
-                    hit_rate_within_5pct=float((paid <= oracle_v * 1.05).mean()),
-                    n=int(valid.sum()),
-                )
-            )
-        return out
+        return summarise_strategies(block, strategy_columns)
 
     report["overall"] = summarise(frame)
     report["uncertainty"] = _bootstrap(frame, summarise)
